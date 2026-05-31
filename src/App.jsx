@@ -658,11 +658,11 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
       const ESC = '\x1B', init = ESC + '@', center = ESC + 'a' + '\x01', left = ESC + 'a' + '\x00', boldOn = ESC + 'E' + '\x01', boldOff = ESC + 'E' + '\x00', line = '--------------------------------\n';
       
-      let receipt = init + center + boldOn + 'TABETAI POS\n' + boldOff + 'Oishii Onigiri & Ramen\n' + line;
-      receipt += left + `ID: ${order.id}\nPelanggan: ${order.customer}\nWaktu: ${order.date || order.time}\n` + line;
+      let receipt = init + center + boldOn + 'TABETAI.ID\n' + boldOff + 'Oishii Onigiri\n' + line;
+      receipt += left + `No.Resi: ${order.id}\nPelanggan: ${order.customer}\nWaktu: ${order.date || order.time}\n` + line;
       
       order.items.forEach(item => {
-        receipt += `${item.name} (${item.variant || item.variantId})\n`;
+        receipt += `${item.name}\n' (${item.variant || item.variantId})\n`;
         const qty = item.quantity || item.qty;
         receipt += `${qty} x ${formatRp(item.price)}   ${formatRp(item.price * qty)}\n`;
       });
@@ -671,7 +671,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       if (order.discount && order.discount.value > 0) {
         receipt += `Subtotal: ${formatRp((order.originalTotal || order.total) + order.discount.value)}\nDiskon: -${formatRp(order.discount.value)}\n`;
       }
-      receipt += boldOn + `TOTAL: ${formatRp(order.total)}\n` + boldOff + `Pembayaran: ${order.payment || 'Tunai/QRIS'}\n` + line + center + 'Terima Kasih!\n\n\n\n';
+      receipt += boldOn + `TOTAL: ${formatRp(order.total)}\n` + boldOff + `Pembayaran: ${order.payment || 'Tunai/QRIS'}\n` + line + center + 'Arigatou!\n\n\n\n';
 
       const encoder = new TextEncoder(), data = encoder.encode(receipt);
       for (let i = 0; i < data.length; i += 256) await printChar.writeValue(data.slice(i, i + 256));
