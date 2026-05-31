@@ -515,12 +515,22 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center items-end bg-slate-900/60 backdrop-blur-sm">
-      <div className="bg-white rounded-t-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full">
-        <div className="p-6 border-b border-slate-100 relative">
-          <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-slate-100 rounded-full"><X size={20} /></button>
-          <div className="flex gap-4 items-center"><img src={item.image} alt={item.name} className="w-20 h-20 bg-slate-50 rounded-2xl object-cover" /><div><h2 className="font-bold text-xl text-slate-800">{item.name}</h2><p className="text-red-600 font-bold text-lg">{formatRp(item.price)}</p></div></div>
+      <div className="bg-white rounded-t-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full overflow-hidden">
+        
+        {/* HERO IMAGE BESAR */}
+        <div className="relative w-full h-56 md:h-64 bg-slate-100 shrink-0">
+          <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-black/40 backdrop-blur-md text-white rounded-full z-10 hover:bg-black/60 transition-colors"><X size={20} /></button>
+          <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
         </div>
-        <div className="flex-1 overflow-y-auto p-6">
+        
+        {/* INFO JUDUL & DESKRIPSI */}
+        <div className="p-6 border-b border-slate-100 shrink-0 bg-white z-10">
+          <h2 className="font-bold text-2xl text-slate-800">{item.name}</h2>
+          {item.desc && <p className="text-sm text-slate-500 mt-2 leading-relaxed">{item.desc}</p>}
+          <p className="text-red-600 font-black text-xl mt-2">{formatRp(item.price)}</p>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-6 bg-white z-10">
           <h3 className="font-bold text-slate-800 mb-3 text-sm">Pilih Varian</h3>
           <div className="space-y-2 mb-6">
             {item.variants?.map(v => (
@@ -1158,6 +1168,7 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
       <form onSubmit={handleSave} className="max-w-2xl space-y-4">
         <div className="flex gap-4 items-center"><input type="checkbox" checked={form.isActive!==false} onChange={e=>setForm({...form, isActive: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold">Tampilkan di Kasir/App</label></div>
         <div><label className="font-bold text-sm">Nama</label><input required value={form.name} onChange={e=>setForm({...form, name: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+        <div><label className="font-bold text-sm">Deskripsi Singkat</label><textarea value={form.desc || ''} onChange={e=>setForm({...form, desc: e.target.value})} placeholder="Jelaskan komposisi makanan ini..." className="w-full p-3 border rounded-xl resize-none outline-none focus:border-slate-400" rows="2" /></div>
         <div className="flex gap-4"><div className="flex-1"><label className="font-bold text-sm">Harga (Rp)</label><input type="number" required value={form.price} onChange={e=>setForm({...form, price: e.target.value})} className="w-full p-3 border rounded-xl" /></div><div className="w-24"><label className="font-bold text-sm">Urutan</label><input type="number" value={form.orderPriority||99} onChange={e=>setForm({...form, orderPriority: e.target.value})} className="w-full p-3 border rounded-xl text-center" /></div></div>
         <div><label className="font-bold text-sm">URL Gambar</label><input required type="url" value={form.image} onChange={e=>setForm({...form, image: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
         <div className="border-t pt-4"><label className="font-bold mb-2 block">Varian & Stok <button type="button" onClick={()=>setForm({...form, variants: [...form.variants, {name:'',qty:0}]})} className="bg-slate-900 text-white px-2 py-1 rounded text-xs ml-2">Tambah</button></label>
@@ -1189,16 +1200,75 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
 }
 
 function AdminMemberManager({ members, db, showToast }) {
+  const [editingMember, setEditingMember] = useState(null);
+
+  const handleSave = async (e) => {
+    e.preventDefault();
+    try {
+      // getDocRef terhubung ke koleksi 'members' seperti yang diatur di awal file
+      await updateDoc(getDocRef('members', editingMember.dbId), {
+        name: editingMember.name,
+        phone: editingMember.phone,
+        points: Number(editingMember.points) // Pastikan poin tersimpan sebagai angka
+      });
+      setEditingMember(null);
+      showToast("Data member berhasil diperbarui!", "success");
+    } catch (error) {
+      showToast("Gagal memperbarui data member", "error");
+    }
+  };
+
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><h2 className="text-2xl font-bold mb-6">Daftar Member</h2>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50 relative">
+      <h2 className="text-2xl font-bold mb-6">Daftar Member</h2>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {members.map(m => (
           <div key={m.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-            <div><h3 className="font-bold">{m.name}</h3><p className="text-slate-500 text-sm">{m.phone}</p><p className="text-yellow-600 font-bold text-sm mt-1">{m.points || 0} Poin</p></div>
-            <button onClick={()=>deleteDoc(getDocRef('members', m.dbId))} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={18}/></button>
+            <div>
+              <h3 className="font-bold text-slate-800">{m.name}</h3>
+              <p className="text-slate-500 text-sm mt-0.5">{m.phone}</p>
+              <p className="text-yellow-600 font-bold text-sm mt-1">{m.points || 0} Poin</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setEditingMember(m)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors">
+                <Edit2 size={18} />
+              </button>
+              <button onClick={() => { if(window.confirm('Hapus member ini?')) deleteDoc(getDocRef('members', m.dbId)) }} className="p-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors">
+                <Trash2 size={18}/>
+              </button>
+            </div>
           </div>
         ))}
       </div>
+
+      {/* MODAL EDIT MEMBER */}
+      {editingMember && (
+        <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
+            <div className="p-5 border-b border-slate-100 flex justify-between bg-slate-50">
+              <h3 className="font-black text-xl text-slate-800">Edit Member</h3>
+              <button onClick={() => setEditingMember(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
+            </div>
+            <form onSubmit={handleSave} className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Nama Member</label>
+                <input type="text" required value={editingMember.name} onChange={e => setEditingMember({...editingMember, name: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">No. WhatsApp</label>
+                <input type="tel" required value={editingMember.phone} onChange={e => setEditingMember({...editingMember, phone: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Jumlah Poin</label>
+                <input type="number" required value={editingMember.points} onChange={e => setEditingMember({...editingMember, points: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
+              </div>
+              <button type="submit" className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl mt-4 transition-colors">
+                Simpan Perubahan
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
