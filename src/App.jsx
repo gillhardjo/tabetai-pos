@@ -110,7 +110,6 @@ export default function TabetaiSuperApp() {
     const unsubMembers = onSnapshot(getColRef('members'), snap => setMembers(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubMenus = onSnapshot(getColRef('menu'), snap => setMenus(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     
-    // Auto-sort by timestamp on fetch
     const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
     const unsubPromos = onSnapshot(getColRef('promos'), snap => setPromos(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
@@ -457,7 +456,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
 }
 
 function MemberPayment({ onCheckStatus, order, userPhone, formatRp }) {
-  const handleConfirmWA = () => window.open(`https://wa.me/${ADMIN_WA_NUMBER.replace(/[^\d+]/g, '')}?text=${encodeURIComponent(`Halo Admin Tabetai, saya ${order.customer} sudah bayar via QRIS untuk Order ID: ${order.id}.`)}`, '_blank');
+  const handleConfirmWA = () => window.open(`https://wa.me/${ADMIN_WA_NUMBER.replace(/[^\d+]/g, '')}?text=${encodeURIComponent(`Halo Admin Tabetai, saya ${order.customer} sudah bayar via QRIS untuk Order ID: ${order.id} sebesar ${formatRp(order.total)}.`)}`, '_blank');
   return (
     <div className="flex-1 flex flex-col bg-white">
       <div className="p-4 bg-white flex items-center border-b border-slate-100"><h1 className="flex-1 text-center font-bold text-lg">Pembayaran</h1></div>
@@ -543,7 +542,7 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 
 
 // ==========================================
-// 3. ADMIN POS VIEW
+// 3. ADMIN POS VIEW (Cashier / Full Width)
 // ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
@@ -692,8 +691,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
       
-      // Lebar Kertas Printer 58mm: 32 Karakter yang paling ideal
-      const lineWidth = 32;
+      // Lebar Kertas Printer 58mm (Diperketat menjadi 28 karakter sesuai revisi)
+      const lineWidth = 28;
       const lineStr = '-'.repeat(lineWidth) + '\n';
       const dotLineStr = '.'.repeat(lineWidth) + '\n';
       
@@ -706,30 +705,31 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       };
       
       // ---- HEADER ----
-      let receipt = init + center + boldOn + 'tabetai.id\n\n' + boldOff;
+      let receipt = init + center + boldOn + 'tabetai.id\n' + boldOff;
+      receipt += center + 'Oishii Onigiri\n\n';
       receipt += left + `Order: ${order.customer}\n`;
-      receipt += `Employee: Admin\n`;
-      receipt += `POS: Master\n`;
+      receipt += `No. Resi: ${order.id}\n`;
+      receipt += `Waktu: ${order.date || order.time}\n`;
       receipt += lineStr;
       
       // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        // Limit nama item max 20 char agar tidak menabrak harga di sebelahnya
-        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
+        // Limit nama item agar aman di 28 karakter saat dipasangkan harga
+        let displayName = item.name.length > 16 ? item.name.substring(0, 15) + '.' : item.name;
         
         receipt += alignRight(displayName, formatRp(item.price * qty));
         receipt += `${qty} x ${formatRp(item.price)}\n`;
         
         const variant = item.variant || item.variantId;
         if (variant && variant !== 'default') {
-          // Pisahkan multi-variant jika ada (dibatasi koma)
+          // Pisahkan multi-variant jika ada
           variant.split(',').forEach(v => {
             receipt += `  + ${v.trim()}\n`;
           });
         }
         if (item.note) receipt += `  Catatan: ${item.note}\n`;
-        receipt += '\n'; // Spasi antar item agar sama dengan di gambar
+        receipt += '\n'; // Spasi antar item
       });
       
       receipt += lineStr;
@@ -750,19 +750,20 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       
       // ---- FOOTER ----
       receipt += center + '**Arigatou**\n';
-      receipt += 'Please consume it immediately on\n';
-      receipt += 'the day it is ordered or store\n';
-      receipt += 'it in the refrigerator for a\n';
-      receipt += 'maximum of 3 days\n\n';
+      receipt += 'Please consume it immediately\n';
+      receipt += 'on the day it is ordered or\n';
+      receipt += 'store it in the refrigerator\n';
+      receipt += 'for a maximum of 3 days\n\n';
       
-      receipt += 'WA : 0812-8555-7779 (text only)\n';
+      receipt += 'WA : 0812-8555-7779\n';
+      receipt += '(text only)\n';
       receipt += 'IG : @tabetaii.id\n\n';
 
       // ---- BOTTOM DATETIME & ID ----
       const orderDate = order.date ? order.date.split(',')[0].trim() : '';
       const orderTime = order.time || '';
       const dateTime = `${orderDate} ${orderTime}`.trim();
-      const shortId = '#' + (order.id.split('-')[1] || order.id); // Ubah format POS-0001 / APP-0001 menjadi #0001
+      const shortId = '#' + (order.id.split('-')[1] || order.id); 
       
       receipt += left + alignRight(dateTime, shortId);
       receipt += '\n\n\n\n';
@@ -872,6 +873,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} db={db} formatRp={formatRp} showToast={showToast} />}
 
+        {/* MODALS KASIR */}
         {checkoutModal && (
           <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
             <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden">
@@ -903,6 +905,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     </div>
   );
 }
+
+// --- Admin Features Components ---
 
 function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, onPrint }) {
   const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
