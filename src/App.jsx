@@ -711,25 +711,24 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       };
       
       // ---- HEADER ----
-      let receiptText = init + center;
-      receiptText += boldOn + 'tabetai.id\n' + boldOff;
+      let receiptText = init + center + boldOn + 'tabetai.id\n' + boldOff;
       receiptText += 'oishii onigiri\n\n';
-      
       receiptText += left + `Order: ${order.customer}\n`;
       receiptText += `No. Resi: ${order.id}\n`;
-      
-      const orderDate = order.date ? order.date.split(',')[0].trim() : '';
-      const orderTime = order.time || '';
-      receiptText += `Waktu: ${orderDate} ${orderTime}\n`;
+      receiptText += `Waktu: ${order.date || order.time}\n`;
       receiptText += lineStr;
       
       // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        // Limit nama item agar sejajar dengan harga totalnya
+        // Limit nama item max 20 char agar tidak menabrak harga di sebelahnya
         let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
         
         receiptText += alignRight(displayName, formatRp(item.price * qty));
+        
+        // Pindahkan Catatan tepat di bawah nama makanan
+        if (item.note) receiptText += `  Catatan: ${item.note}\n`;
+        
         receiptText += `${qty} x ${formatRp(item.price)}\n`;
         
         const variant = item.variant || item.variantId;
@@ -738,10 +737,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
             receiptText += `  + ${v.trim()}\n`;
           });
         }
-        if (item.note) receiptText += `  Catatan: ${item.note}\n`;
+        
+        // Memberikan jarak (baris kosong) pada setiap makanan
+        // Trik spasi ' \n' agar printer thermal dipaksa membuat jarak kosong
+        receiptText += ' \n'; 
       });
       
-      receiptText += lineUnderscore;
+      receiptText += lineStr;
       
       // ---- TOTAL & DISKON ----
       if (order.discount && order.discount.value > 0) {
