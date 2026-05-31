@@ -413,7 +413,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-6">
           <h2 className="font-bold text-slate-800 text-sm mb-3">Kode Promo / Voucher</h2>
           <div className="flex gap-2">
-            <input type="text" value={promoCode} onChange={(e) => setPromoCode(e.target.value)} placeholder="Masukkan kode promo" className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:border-red-500 outline-none uppercase text-sm" />
+            <input type="text" value={promoCode} onChange={(e) => setPromoCode(e.target.value.toUpperCase())} placeholder="Masukkan kode promo" className="flex-1 px-4 py-3 rounded-xl border border-slate-200 focus:border-red-500 outline-none uppercase text-sm" />
             <button onClick={applyPromo} className="bg-slate-900 text-white px-6 py-3 rounded-xl font-bold text-sm hover:bg-slate-800">Pakai</button>
           </div>
         </div>
@@ -525,6 +525,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const [searchQuery, setSearchQuery] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [discount, setDiscount] = useState(0);
+  const [appliedPromo, setAppliedPromo] = useState(null);
 
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState(''); 
@@ -558,9 +559,10 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     if (valid) {
       const sub = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
       setDiscount(valid.type === 'percent' ? sub * (valid.value / 100) : valid.value);
+      setAppliedPromo(valid);
       showToast(`Promo ${valid.code} diterapkan!`, "success");
     } else {
-      setDiscount(0); showToast("Kode promo tidak valid", "error");
+      setDiscount(0); setAppliedPromo(null); showToast("Kode promo tidak valid", "error");
     }
   };
 
@@ -583,14 +585,28 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
 
     const newTrx = {
-      id, customer: 'Walk-in / Cashier', items: [...cart], total: calculateTotal(),
-      status: "Selesai", payment: paymentMethod, 
+      id, customer: 'Walk-in / Cashier', items: [...cart], 
+      total: calculateTotal(),
+      originalTotal: calculateSubtotal(),
+      discount: appliedPromo ? { code: appliedPromo.code, value: discount } : null,
+      status: "Diproses", payment: paymentMethod, 
+      isStockDeducted: true,
       time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
       date: new Date().toLocaleString('id-ID'), timestamp: Date.now()
     };
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
-      setCart([]); setPromoCode(""); setDiscount(0); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false);
+      
+      // Memotong stok otomatis saat pesanan kasir masuk ke status 'Diproses'
+      for (const item of cart) {
+        const menuTarget = menus.find(m => m.dbId === item.originalId);
+        if (menuTarget) {
+          const updatedVariants = menuTarget.variants.map(v => v.name === item.variantId ? { ...v, qty: Math.max(0, v.qty - item.qty) } : v);
+          await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants });
+        }
+      }
+
+      setCart([]); setPromoCode(""); setDiscount(0); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false);
       showToast("Pembayaran Berhasil! Struk siap dicetak.", "success");
     } catch (e) { showToast("Gagal memproses pembayaran", "error"); }
   };
@@ -660,17 +676,18 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         receipt += `${qty} x ${formatRp(item.price)}\n`;
         
         const variant = item.variant || item.variantId;
-        if (variant && variant !== 'default') receipt += `${variant}\n`;
+        if (variant && variant !== 'default') receipt += `+ ${variant}\n`;
         if (item.note) receipt += `Catatan: ${item.note}\n`;
+        receipt += '\n'; // Spasi antar item
       });
       
+      receipt += lineUnderscore;
       if (order.discount && order.discount.value > 0) {
-        receipt += lineUnderscore;
         receipt += alignRight('Subtotal:', formatRp((order.originalTotal || order.total) + order.discount.value));
-        receipt += alignRight('Diskon:', '-' + formatRp(order.discount.value));
+        receipt += alignRight(`Diskon (${order.discount.code}):`, '-' + formatRp(order.discount.value));
+        receipt += lineUnderscore;
       }
 
-      receipt += lineUnderscore;
       receipt += boldOn + alignRight('TOTAL:', formatRp(order.total)) + boldOff;
       receipt += `pembayaran: ${order.payment || 'Tunai / QRIS'}\n`;
       receipt += lineUnderscore;
@@ -761,8 +778,10 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                 ))}
               </div>
               <div className="p-4 bg-white shadow-[0_-10px_20px_rgba(0,0,0,0.05)] z-20">
-                <div className="flex gap-2 mb-4"><input type="text" placeholder="Promo" value={promoCode} onChange={(e)=>setPromoCode(e.target.value)} className="flex-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none" /><button onClick={applyPromoCode} className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl">Pakai</button></div>
-                <div className="flex justify-between items-center mb-2"><span className="text-slate-600">Total</span><span className="text-2xl font-black text-red-600">{formatRp(calculateTotal())}</span></div>
+                <div className="flex gap-2 mb-4"><input type="text" placeholder="Promo" value={promoCode} onChange={(e)=>setPromoCode(e.target.value.toUpperCase())} className="flex-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none uppercase" /><button onClick={applyPromoCode} className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl">Pakai</button></div>
+                <div className="flex justify-between items-center mb-1"><span className="text-slate-500 text-sm">Subtotal</span><span className="font-semibold text-slate-700">{formatRp(calculateSubtotal())}</span></div>
+                {discount > 0 && <div className="flex justify-between items-center mb-1 text-green-600"><span className="text-sm">Diskon Promo ({appliedPromo?.code})</span><span className="font-semibold">-{formatRp(discount)}</span></div>}
+                <div className="flex justify-between items-center mb-3 pt-2 border-t border-slate-100"><span className="text-slate-800 font-bold">Total Akhir</span><span className="text-2xl font-black text-red-600">{formatRp(calculateTotal())}</span></div>
                 <div className="flex gap-2">
                   <button onClick={() => { if (cart.length > 0) setShowSaveBillModal(true); }} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl font-bold"><FolderOpen size={24} /></button>
                   <button onClick={() => { if (cart.length > 0) setCheckoutModal(true); }} className="flex-1 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200">Pilih Pembayaran</button>
