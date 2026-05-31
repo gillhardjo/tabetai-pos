@@ -4,10 +4,14 @@ import {
   User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer
 } from 'lucide-react';
 
+// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
+// ==========================================
+// 1. FIREBASE CONFIGURATION
+// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAwsfBMS0_9gbPayYU-Ry2iFNfF8TMMKVU",
   authDomain: "tabetai-app-v103.firebaseapp.com",
@@ -22,6 +26,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Fungsi Helper Path Firebase
 const getColRef = (colName) => {
   let name = colName;
   if (name === 'menu') name = 'menus';
@@ -36,6 +41,9 @@ const getDocRef = (colName, docId) => {
   return doc(db, name, docId);
 };
 
+// ==========================================
+// CONSTANTS & UTILS
+// ==========================================
 const ADMIN_CREDENTIALS = { username: 'admin', phone: '2131' };
 const ADMIN_WA_NUMBER = "6281285557779"; 
 const qrisImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public/qris.png?raw=true";
@@ -56,6 +64,9 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   return `https://wa.me/${waNumber}?text=${text}`;
 };
 
+// ==========================================
+// MAIN APP COMPONENT (ROOT)
+// ==========================================
 export default function TabetaiSuperApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
@@ -158,6 +169,9 @@ export default function TabetaiSuperApp() {
   );
 }
 
+// ==========================================
+// 1. GUEST VIEW
+// ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
   const [name, setName] = useState('');
@@ -211,6 +225,9 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
+// ==========================================
+// 2. MEMBER APP VIEW (Customer Mobile App)
+// ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home');
   const [cart, setCart] = useState([]);
@@ -427,7 +444,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
           <div className="bg-red-50 text-red-700 text-xs text-center p-2 rounded-lg mt-4 font-medium">Dapatkan <strong className="text-red-800">{Math.floor(finalTotal * 0.1)} Poin</strong> dari pesanan ini!</div>
         </div>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"><button onClick={() => onPay(finalTotal, appliedPromo)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 flex justify-center gap-2">Lanjut Pembayaran</button></div>
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"><button onClick={() => onPay(finalTotal, appliedPromo ? { code: appliedPromo.code, value: discountAmount } : null)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 flex justify-center gap-2">Lanjut Pembayaran</button></div>
     </div>
   );
 }
@@ -518,15 +535,20 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 }
 
 
+// ==========================================
+// 3. ADMIN POS VIEW (Cashier / Full Width)
+// ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
   
+  // Kasir Local State
   const [cart, setCart] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [discount, setDiscount] = useState(0);
   const [appliedPromo, setAppliedPromo] = useState(null);
 
+  // Modals POS
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState(''); 
   const [cashAmount, setCashAmount] = useState('');
@@ -597,7 +619,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
-      // Memotong stok otomatis saat pesanan kasir masuk ke status 'Diproses'
+      // Memotong stok otomatis untuk varian yang dipilih saat POS diproses
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === item.originalId);
         if (menuTarget) {
@@ -619,6 +641,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     } catch (e) { showToast("Gagal menyimpan bill", "error"); }
   };
 
+  // FUNGSI PRINT BLUETOOTH THERMAL
   const handlePrintReceipt = async (order) => {
     if (!navigator.bluetooth) {
       return showToast("Browser/Perangkat ini tidak mendukung Bluetooth Web API", "error");
@@ -628,7 +651,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       showToast("Mencari Printer Bluetooth...", "info");
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] // Layanan standar Printer
+        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] // UUID Layanan Printer Umum
       });
       
       const server = await device.gatt.connect();
@@ -638,26 +661,29 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       for (const service of services) {
         const chars = await service.getCharacteristics();
         for (const char of chars) {
-          if (char.properties.write || char.properties.writeWithoutResponse) { printChar = char; break; }
+          if (char.properties.write || char.properties.writeWithoutResponse) {
+            printChar = char;
+            break;
+          }
         }
         if (printChar) break;
       }
 
       if (!printChar) throw new Error("Tidak menemukan jalur tulis di printer ini.");
 
-      // ESC/POS Commands
       const ESC = '\x1B';
       const init = ESC + '@';
       const center = ESC + 'a' + '\x01';
       const left = ESC + 'a' + '\x00';
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
-      const lineStr = '--------------------------------\n';
-      const lineUnderscore = '________________________________\n';
+      
+      const lineStr = '-'.repeat(31) + '\n';
+      const lineUnderscore = '_'.repeat(31) + '\n';
       
       const alignRight = (leftText, rightText) => {
         let l = String(leftText); let r = String(rightText);
-        let spaces = 32 - l.length - r.length;
+        let spaces = 31 - l.length - r.length;
         if (spaces < 1) return l + ' ' + r + '\n';
         return l + ' '.repeat(spaces) + r + '\n';
       };
@@ -670,7 +696,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
+        let displayName = item.name.length > 19 ? item.name.substring(0, 18) + '.' : item.name;
         
         receipt += alignRight(displayName, formatRp(item.price * qty));
         receipt += `${qty} x ${formatRp(item.price)}\n`;
@@ -678,24 +704,27 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         const variant = item.variant || item.variantId;
         if (variant && variant !== 'default') receipt += `+ ${variant}\n`;
         if (item.note) receipt += `Catatan: ${item.note}\n`;
-        receipt += '\n'; // Spasi antar item
+        receipt += '\n'; // Jarak antar makanan
       });
       
       receipt += lineUnderscore;
+      
       if (order.discount && order.discount.value > 0) {
         receipt += alignRight('Subtotal:', formatRp((order.originalTotal || order.total) + order.discount.value));
         receipt += alignRight(`Diskon (${order.discount.code}):`, '-' + formatRp(order.discount.value));
         receipt += lineUnderscore;
       }
 
-      receipt += boldOn + alignRight('TOTAL:', formatRp(order.total)) + boldOff;
+      let totalLine = alignRight('TOTAL:', formatRp(order.total));
+      receipt += boldOn + totalLine.replace('\n', '') + boldOff + '\n';
+      
       receipt += `pembayaran: ${order.payment || 'Tunai / QRIS'}\n`;
       receipt += lineUnderscore;
       
-      receipt += center + 'Arigatou\n';
-      receipt += 'Harap dikonsumsi segera setelah\ndi pesan atau simpan dalam\nlemari es maksimum 3 hari\n\n';
+      receipt += center + boldOn + 'Arigatou\n' + boldOff;
+      receipt += 'Harap dikonsumsi segera\nsetelah dipesan atau simpan\ndalam lemari es maks 3 hari\n\n';
       receipt += 'WA: 0812-8555-7779\n';
-      receipt += 'Follow our IG: @tabetaii.id\n\n\n\n';
+      receipt += 'Follow IG: @tabetaii.id\n\n\n\n';
 
       const encoder = new TextEncoder();
       const data = encoder.encode(receipt);
@@ -707,7 +736,11 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       showToast("Struk berhasil dicetak!", "success");
     } catch (error) {
       console.error(error);
-      showToast(error.message.includes('cancelled') ? 'Pencetakan dibatalkan' : 'Gagal mencetak: ' + error.message, "error");
+      if (error.name === 'SecurityError' || error.message.includes('permissions policy')) {
+        showToast("Bluetooth diblokir di layar Preview. Buka aplikasi di tab baru atau deploy ke Vercel.", "error");
+      } else {
+        showToast(error.message.includes('cancelled') ? 'Pencetakan dibatalkan' : 'Gagal mencetak: ' + error.message, "error");
+      }
     }
   };
 
@@ -725,7 +758,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                 <tab.icon size={22} className="mx-auto md:mx-0"/>
                 <span className="font-bold hidden md:block">{tab.label}</span>
                 {tab.id === 'openbill' && savedBills.length > 0 && <span className="absolute top-2 right-2 md:static md:ml-auto bg-yellow-400 text-black text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full font-bold">{savedBills.length}</span>}
-                {tab.id === 'pesanan' && pendingCount > 0 && <span className="absolute top-2 right-2 md:static md:ml-auto bg-blue-500 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full font-bold animate-pulse">{pendingCount}</span>}
+                {tab.id === 'pesanan' && pendingCount > 0 && <span className="absolute top-2 right-2 md:static md:ml-auto bg-blue-500 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full font-bold shadow-[0_0_10px_rgba(59,130,246,0.5)] animate-pulse">{pendingCount} Baru</span>}
               </button>
             ))}
           </nav>
