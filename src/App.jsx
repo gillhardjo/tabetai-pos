@@ -805,6 +805,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 }
 
 // --- Admin Features Components ---
+
 function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, onPrint }) {
   const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
   
@@ -812,6 +813,13 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
   const [filterDate, setFilterDate] = useState("");
   const [filterStatus, setFilterStatus] = useState("Semua");
   const [sortOrder, setSortOrder] = useState("Terbaru");
+  
+  // State untuk menyimpan daftar pesanan yang sedang dibuka detailnya
+  const [expandedOrders, setExpandedOrders] = useState({});
+
+  const toggleOrderDetails = (orderId) => {
+    setExpandedOrders(prev => ({ ...prev, [orderId]: !prev[orderId] }));
+  };
   
   const handleStatusChange = async (orderId, newStatus) => {
     const target = orders.find(o => o.dbId === orderId);
@@ -863,8 +871,11 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
     return [...result].sort((a, b) => {
       const timeA = Number(a.timestamp) || 0;
       const timeB = Number(b.timestamp) || 0;
-      if (sortOrder === "Terbaru") return timeB - timeA;
-      else return timeA - timeB;
+      if (sortOrder === "Terbaru") {
+        return timeB - timeA; // Waktu paling akhir/terbaru berada di atas (Descending)
+      } else {
+        return timeA - timeB; // Waktu paling awal/terlama berada di atas (Ascending)
+      }
     });
   }, [orders, searchQuery, filterDate, filterStatus, sortOrder]);
 
@@ -897,17 +908,64 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
             <p className="text-center text-slate-500 mt-10">Tidak ada pesanan yang sesuai filter.</p>
           ) : (
             filteredOrders.map(order => (
-              <div key={order.dbId} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row justify-between md:items-center gap-4">
-                <div><p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.date || order.time}</span></p><p className="text-sm font-semibold text-red-600">{order.customer}</p></div>
-                <div className="flex items-center gap-3">
-                  <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm">
-                    <Printer size={18}/> Cetak
-                  </button>
-                  <select value={order.status} onChange={(e) => handleStatusChange(order.dbId, e.target.value)} className="p-2 border rounded-xl bg-slate-50 font-bold text-sm">
-                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
-                  </select>
-                  <button onClick={()=>deleteDoc(getDocRef('transactions', order.dbId))} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={20}/></button>
+              <div key={order.dbId} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-4">
+                {/* Header Kartu Pesanan */}
+                <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
+                  <div>
+                    <p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.date || order.time}</span></p>
+                    <p className="text-sm font-semibold text-red-600">{order.customer}</p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 md:gap-3">
+                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
+                      {expandedOrders[order.dbId] ? <ChevronLeft className="rotate-90" size={18}/> : <ChevronLeft className="-rotate-90" size={18}/>}
+                      {expandedOrders[order.dbId] ? 'Tutup' : 'Buka Pesanan'}
+                    </button>
+                    <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm">
+                      <Printer size={18}/> Cetak
+                    </button>
+                    <select value={order.status} onChange={(e) => handleStatusChange(order.dbId, e.target.value)} className="p-2 border rounded-xl bg-slate-50 font-bold text-sm">
+                      {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+                    </select>
+                    <button onClick={()=>deleteDoc(getDocRef('transactions', order.dbId))} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><Trash2 size={20}/></button>
+                  </div>
                 </div>
+
+                {/* Area Expand (Buka Pesanan) */}
+                {expandedOrders[order.dbId] && (
+                  <div className="mt-2 pt-4 border-t border-slate-100 animate-in fade-in slide-in-from-top-2">
+                    <h4 className="font-bold text-slate-800 text-sm mb-3">Daftar Item:</h4>
+                    <div className="space-y-2 mb-4">
+                      {order.items.map((item, idx) => (
+                        <div key={idx} className="flex justify-between items-start text-sm bg-slate-50 p-3 rounded-xl border border-slate-100">
+                          <div>
+                            <span className="font-bold text-slate-800 mr-2">{(item.quantity || item.qty)}x</span>
+                            <span className="font-semibold text-slate-700">{item.name}</span>
+                            <p className="text-xs text-slate-500 mt-1 ml-6">Varian: {item.variant || item.variantId}</p>
+                            {item.note && <p className="text-xs text-orange-600 italic mt-0.5 ml-6">Catatan: "{item.note}"</p>}
+                          </div>
+                          <span className="font-bold text-slate-700">{formatRp(item.price * (item.quantity || item.qty))}</span>
+                        </div>
+                      ))}
+                    </div>
+                    
+                    <div className="flex flex-col gap-1 items-end pt-3 border-t border-dashed border-slate-200">
+                      <div className="flex justify-between w-56 text-sm text-slate-500">
+                        <span>Subtotal:</span>
+                        <span>{formatRp(order.originalTotal || order.total + (order.discount?.value || 0))}</span>
+                      </div>
+                      {order.discount && order.discount.value > 0 && (
+                        <div className="flex justify-between w-56 text-sm text-green-600">
+                          <span>Diskon Promo ({order.discount.code}):</span>
+                          <span>-{formatRp(order.discount.value)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between w-56 text-base font-bold text-slate-800 mt-2 pt-2 border-t border-slate-200">
+                        <span>Total Akhir:</span>
+                        <span className="text-red-600">{formatRp(order.total)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             ))
           )}
