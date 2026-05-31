@@ -552,7 +552,9 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
   // Modals POS
   const [checkoutModal, setCheckoutModal] = useState(false);
-      const [variantModal, setVariantModal] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState(''); 
+  const [cashAmount, setCashAmount] = useState('');
+  const [variantModal, setVariantModal] = useState(false);
   const [showSaveBillModal, setShowSaveBillModal] = useState(false);
   const [billName, setBillName] = useState("");
 
