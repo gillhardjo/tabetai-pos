@@ -697,10 +697,10 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
       
-      // Lebar Kertas Printer 58mm
-      const lineWidth = 32;
+      // Lebar Kertas Printer 58mm diset presisi ke 28 Karakter
+      const lineWidth = 28;
       const lineStr = '-'.repeat(lineWidth) + '\n';
-      const lineUnderscore = '_'.repeat(lineWidth) + '\n';
+      const dotLineStr = '.'.repeat(lineWidth) + '\n';
       
       // Fungsi Align Kanan Kiri
       const alignRight = (leftText, rightText) => {
@@ -709,24 +709,39 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         if (spaces < 1) return l + ' ' + r + '\n';
         return l + ' '.repeat(spaces) + r + '\n';
       };
+
+      // --- FILTER WAKTU (MEMAKSA JADI HH:MM) ---
+      let timeFormatted = '';
+      if (order.time) {
+        // Ambil hanya 5 huruf pertama (Misal "14:30:45" menjadi "14:30")
+        timeFormatted = order.time.replace('.', ':').substring(0, 5);
+      } else if (order.timestamp) {
+        timeFormatted = new Date(order.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+      }
+
+      let dateFormatted = '';
+      if (order.date) {
+        dateFormatted = order.date.split(',')[0].trim();
+      } else if (order.timestamp) {
+        dateFormatted = new Date(order.timestamp).toLocaleDateString('id-ID');
+      }
       
       // ---- HEADER ----
       let receiptText = init + center + boldOn + 'tabetai.id\n' + boldOff;
       receiptText += 'oishii onigiri\n\n';
       receiptText += left + `Order: ${order.customer}\n`;
       receiptText += `No. Resi: ${order.id}\n`;
-      receiptText += `Waktu: ${order.date || order.time}\n`;
+      receiptText += `Waktu: ${timeFormatted}\n`;
       receiptText += lineStr;
       
       // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        // Limit nama item max 20 char agar tidak menabrak harga di sebelahnya
-        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
+        // Limit nama item max agar tidak menabrak harga pada lebar 28 char
+        let displayName = item.name.length > 15 ? item.name.substring(0, 14) + '.' : item.name;
         
         receiptText += alignRight(displayName, formatRp(item.price * qty));
         
-        // Pindahkan Catatan tepat di bawah nama makanan
         if (item.note) receiptText += `  Catatan: ${item.note}\n`;
         
         receiptText += `${qty} x ${formatRp(item.price)}\n`;
@@ -738,32 +753,43 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           });
         }
         
-        // Memberikan jarak (baris kosong) pada setiap makanan
-        // Trik spasi ' \n' agar printer thermal dipaksa membuat jarak kosong
-        receiptText += ' \n'; 
+        receiptText += ' \n'; // Jarak antar makanan
       });
       
       receiptText += lineStr;
       
-      // ---- TOTAL & DISKON ----
+      // ---- DISKON ----
       if (order.discount && order.discount.value > 0) {
         receiptText += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value));
-        receiptText += alignRight(`Diskon (${order.discount.code})`, '-' + formatRp(order.discount.value));
+        receiptText += alignRight(`Diskon`, '-' + formatRp(order.discount.value));
+        receiptText += lineStr;
       }
 
-      let totalLine = alignRight('TOTAL', formatRp(order.total));
-      receiptText += boldOn + totalLine.replace('\n', '') + boldOff + '\n';
-      receiptText += `Pembayaran: ${order.payment || 'Tunai/QRIS'}\n`;
-      receiptText += lineUnderscore;
+      // ---- TOTAL & PAYMENT ----
+      let totalLine = alignRight('Total', formatRp(order.total));
+      receiptText += boldOn + totalLine.replace('\n', '') + boldOff + '\n\n';
       
-      // ---- FOOTER ----
-      receiptText += center + 'Arigatou\n';
-      receiptText += 'Harap dikonsumsi segera setelah\n';
-      receiptText += 'di pesan atau simpan dalam\n';
-      receiptText += 'lemari es maksimum 3 hari\n\n';
+      receiptText += alignRight(order.payment || 'QRIS', formatRp(order.total));
+      receiptText += dotLineStr;
       
-      receiptText += 'WA: 0812-8555-7779\n';
-      receiptText += 'Follow our IG: @tabetaii.id\n\n\n\n\n';
+      // ---- FOOTER (Disesuaikan untuk lebar 28) ----
+      receiptText += center + '**Arigatou**\n';
+      receiptText += 'Please consume it\n';
+      receiptText += 'immediately on the day\n';
+      receiptText += 'it is ordered or store it\n';
+      receiptText += 'in the refrigerator for\n';
+      receiptText += 'a maximum of 3 days\n\n';
+      
+      receiptText += 'WA : 0812-8555-7779\n';
+      receiptText += '(text only)\n';
+      receiptText += 'IG : @tabetaii.id\n\n';
+
+      // ---- BOTTOM DATETIME & ID ----
+      const dateTime = `${dateFormatted} ${timeFormatted}`.trim();
+      const shortId = '#' + (order.id.split('-')[1] || order.id);
+      
+      receiptText += left + alignRight(dateTime, shortId);
+      receiptText += '\n\n\n\n';
 
       // --- EXECUTE PRINT ---
       const encoder = new TextEncoder();
