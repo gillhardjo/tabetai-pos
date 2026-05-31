@@ -71,16 +71,19 @@ export default function TabetaiSuperApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
   
+  // Realtime Data States
   const [members, setMembers] = useState([]);
   const [menus, setMenus] = useState([]);
   const [orders, setOrders] = useState([]);
   const [promos, setPromos] = useState([]);
   const [savedBills, setSavedBills] = useState([]);
   
-  const [role, setRole] = useState('guest'); 
+  // Navigation & User State
+  const [role, setRole] = useState('guest'); // 'guest' | 'member' | 'admin'
   const [currentUser, setCurrentUser] = useState(null);
+  
+  // Toast Notification
   const [toast, setToast] = useState(null);
-
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
@@ -106,9 +109,11 @@ export default function TabetaiSuperApp() {
     
     const unsubMembers = onSnapshot(getColRef('members'), snap => setMembers(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubMenus = onSnapshot(getColRef('menu'), snap => setMenus(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
+    
+    // Auto-sort by timestamp on fetch
+    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
     const unsubPromos = onSnapshot(getColRef('promos'), snap => setPromos(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
+    const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
     
     return () => { unsubMembers(); unsubMenus(); unsubOrders(); unsubPromos(); unsubBills(); };
   }, [isAuthReady]);
@@ -159,7 +164,6 @@ export default function TabetaiSuperApp() {
           {toast.message}
         </div>
       )}
-      
       {authError && <div className="fixed top-0 left-0 right-0 bg-red-600 text-white text-center text-xs py-1 z-[1000]">Error Firebase: {authError}</div>}
 
       {role === 'guest' && <GuestView onLogin={handleLogin} onRegister={handleRegister} />}
@@ -169,8 +173,9 @@ export default function TabetaiSuperApp() {
   );
 }
 
+
 // ==========================================
-// 1. GUEST VIEW
+// 1. GUEST VIEW (Login & Register)
 // ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
@@ -225,11 +230,12 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
+
 // ==========================================
-// 2. MEMBER APP VIEW (Customer Mobile App)
+// 2. MEMBER APP VIEW (Customer)
 // ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
-  const [view, setView] = useState('home');
+  const [view, setView] = useState('home'); 
   const [cart, setCart] = useState([]);
   const [selectedItem, setSelectedItem] = useState(null);
 
@@ -253,17 +259,19 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const placeOrder = async (finalTotal, discountObj) => {
     const earnedPoints = Math.floor(finalTotal * 0.1); 
     
-    // Auto-generate Sequential ID for App
+    // Auto Generate Sequential APP-ID
     let maxId = 0;
     orders.forEach(o => {
-      const match = o.id && o.id.match(/-(0*\d+)$/);
-      if (match && o.id.startsWith('APP-')) {
+      const match = o.id && o.id.match(/APP-(\d+)$/);
+      if (match) {
         const num = parseInt(match[1], 10);
         if (num > maxId) maxId = num;
       }
     });
     const orderId = `APP-${String(maxId + 1).padStart(4, '0')}`;
     const dateObj = new Date();
+    // Format Waktu Konsisten: HH:MM
+    const timeStr = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
     
     const newOrderData = {
       id: orderId,
@@ -278,7 +286,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       isStockDeducted: false,
       status: 'Menunggu Pembayaran',
       payment: 'QRIS / Transfer',
-      time: dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      time: timeStr,
       date: dateObj.toLocaleString('id-ID'),
       filterDateKey: `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}-${String(dateObj.getDate()).padStart(2, '0')}`,
       timestamp: Date.now()
@@ -295,7 +303,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   };
 
   const activeMenus = menus.filter(m => m.isActive !== false).sort((a,b) => (a.orderPriority || 99) - (b.orderPriority || 99));
-  const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone).sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+  const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone);
 
   return (
     <div className="w-full max-w-md bg-slate-50 min-h-screen relative shadow-2xl flex flex-col overflow-hidden">
@@ -347,7 +355,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
                 </div>
                 <div className="flex-1 flex flex-col">
                   <h3 className="font-bold text-slate-800">{item.name}</h3>
-                  <p className="text-xs text-slate-500 mt-1 line-clamp-2">{item.desc}</p>
                   <div className="mt-auto flex items-center justify-between pt-3">
                     <span className="font-bold text-red-600">{formatRp(item.price)}</span>
                     <button onClick={() => setSelectedItem(item)} className="bg-red-50 text-red-600 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-red-100">Tambah</button>
@@ -479,7 +486,7 @@ function MemberStatus({ orders, onBack, userPhone, formatRp }) {
           <div key={order.dbId} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
             <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'Selesai' ? 'bg-green-500' : order.status === 'Diproses' ? 'bg-blue-500' : 'bg-orange-500'}`} />
             <div className="flex justify-between items-start mb-3">
-              <div><p className="text-xs text-slate-500 mb-0.5">{order.date || order.time}</p><p className="font-bold text-slate-800 text-sm">ID: {order.id}</p></div>
+              <div><p className="text-xs text-slate-500 mb-0.5">{order.time} {order.date && `• ${order.date.split(',')[0]}`}</p><p className="font-bold text-slate-800 text-sm">ID: {order.id}</p></div>
               <span className={`text-xs font-bold px-3 py-1 rounded-full ${order.status === 'Selesai' ? 'bg-green-100 text-green-700' : order.status === 'Diproses' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{order.status}</span>
             </div>
             <div className="border-t border-b border-slate-50 py-3 my-3 text-sm text-slate-600 space-y-1">
@@ -536,7 +543,7 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 
 
 // ==========================================
-// 3. ADMIN POS VIEW (Cashier / Full Width)
+// 3. ADMIN POS VIEW
 // ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
@@ -605,6 +612,9 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       }
     });
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
+    
+    // Format Waktu Konsisten: HH:MM
+    const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
       id, customer: 'Walk-in / Cashier', items: [...cart], 
@@ -613,18 +623,21 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       discount: appliedPromo ? { code: appliedPromo.code, value: discount } : null,
       status: "Diproses", payment: paymentMethod, 
       isStockDeducted: true,
-      time: new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }),
+      time: timeStr,
       date: new Date().toLocaleString('id-ID'), timestamp: Date.now()
     };
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
-      // Memotong stok otomatis untuk varian yang dipilih saat POS diproses
+      // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === item.originalId);
         if (menuTarget) {
           const updatedVariants = menuTarget.variants.map(v => v.name === item.variantId ? { ...v, qty: Math.max(0, v.qty - item.qty) } : v);
-          await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants });
+          const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
+          const updates = { variants: updatedVariants };
+          if (totalQty <= 0) updates.isActive = false; // Auto Hide
+          await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
 
@@ -636,12 +649,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const handleSaveBill = async () => {
     if (cart.length === 0 || !billName) return showToast("Keranjang kosong / Nama belum diisi", "error");
     try {
-      await setDoc(getDocRef('savedBills', `BILL-${Date.now()}`), { name: billName, items: [...cart], timeString: new Date().toLocaleTimeString('id-ID'), timestamp: Date.now() });
+      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+      await setDoc(getDocRef('savedBills', `BILL-${Date.now()}`), { name: billName, items: [...cart], timeString: timeStr, timestamp: Date.now() });
       setCart([]); setShowSaveBillModal(false); setBillName(""); showToast(`Bill '${billName}' disimpan`, "success");
     } catch (e) { showToast("Gagal menyimpan bill", "error"); }
   };
 
-  // FUNGSI PRINT BLUETOOTH THERMAL
+  // FUNGSI PRINT BLUETOOTH THERMAL (28 Karakter)
   const handlePrintReceipt = async (order) => {
     if (!navigator.bluetooth) {
       return showToast("Browser/Perangkat ini tidak mendukung Bluetooth Web API", "error");
@@ -651,7 +665,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       showToast("Mencari Printer Bluetooth...", "info");
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
-        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] // UUID Layanan Printer Umum
+        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] 
       });
       
       const server = await device.gatt.connect();
@@ -678,12 +692,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
       
-      const lineStr = '-'.repeat(31) + '\n';
-      const lineUnderscore = '_'.repeat(31) + '\n';
+      // Lebar Kertas Printer 58mm: 28 karakter max ideal
+      const lineStr = '-'.repeat(28) + '\n';
+      const lineUnderscore = '_'.repeat(28) + '\n';
       
       const alignRight = (leftText, rightText) => {
         let l = String(leftText); let r = String(rightText);
-        let spaces = 31 - l.length - r.length;
+        let spaces = 28 - l.length - r.length;
         if (spaces < 1) return l + ' ' + r + '\n';
         return l + ' '.repeat(spaces) + r + '\n';
       };
@@ -691,12 +706,12 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       let receipt = init + center + boldOn + 'tabetai.id\n' + boldOff + 'oishii onigiri\n\n';
       receipt += left + `order: ${order.customer}\n`;
       receipt += `no. resi: ${order.id}\n`;
-      receipt += `waktu: ${order.date || order.time}\n`;
+      receipt += `waktu: ${order.time} ${order.date ? order.date.split(',')[0] : ''}\n`;
       receipt += lineStr;
       
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        let displayName = item.name.length > 19 ? item.name.substring(0, 18) + '.' : item.name;
+        let displayName = item.name.length > 16 ? item.name.substring(0, 15) + '.' : item.name;
         
         receipt += alignRight(displayName, formatRp(item.price * qty));
         receipt += `${qty} x ${formatRp(item.price)}\n`;
@@ -893,7 +908,10 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
             const menuTarget = menus.find(m => m.dbId === (item.dbId || item.originalId));
             if (menuTarget) {
               const updatedVariants = menuTarget.variants.map(v => v.name === (item.variant || item.variantId) ? { ...v, qty: Math.max(0, v.qty - (item.quantity||item.qty)) } : v);
-              await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants });
+              const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
+              const menuUpdates = { variants: updatedVariants };
+              if (totalQty === 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
+              await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
         }
@@ -962,10 +980,13 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
             <p className="text-center text-slate-500 mt-10">Tidak ada pesanan yang sesuai filter.</p>
           ) : (
             filteredOrders.map(order => (
-              <div key={order.dbId} className="bg-white p-5 rounded-2xl shadow-sm border border-slate-100 flex flex-col gap-4">
+              <div key={order.dbId} className={`p-5 rounded-2xl shadow-sm border flex flex-col gap-4 relative overflow-hidden transition-all duration-300 ${order.status === 'Menunggu Pembayaran' ? 'border-blue-400 shadow-[0_0_15px_rgba(96,165,250,0.3)] bg-blue-50/50' : 'bg-white border-slate-100'}`}>
+                {order.status === 'Menunggu Pembayaran' && (
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500 animate-pulse" />
+                )}
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                   <div>
-                    <p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.date || order.time}</span></p>
+                    <p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.time} {order.date && `• ${order.date.split(',')[0]}`}</span></p>
                     <p className="text-sm font-semibold text-red-600">{order.customer}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 md:gap-3">
