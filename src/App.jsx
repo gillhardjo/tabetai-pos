@@ -79,7 +79,7 @@ export default function TabetaiSuperApp() {
   const [savedBills, setSavedBills] = useState([]);
   
   // Navigation & User State
-  const [role, setRole] = useState('guest'); 
+  const [role, setRole] = useState('guest'); // 'guest' | 'member' | 'admin'
   const [currentUser, setCurrentUser] = useState(null);
   
   // Toast Notification
@@ -174,7 +174,7 @@ export default function TabetaiSuperApp() {
 
 
 // ==========================================
-// 1. GUEST VIEW
+// 1. GUEST VIEW (Login & Register)
 // ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
@@ -231,7 +231,7 @@ function GuestView({ onLogin, onRegister }) {
 
 
 // ==========================================
-// 2. MEMBER APP VIEW
+// 2. MEMBER APP VIEW (Customer)
 // ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home'); 
@@ -258,6 +258,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const placeOrder = async (finalTotal, discountObj) => {
     const earnedPoints = Math.floor(finalTotal * 0.1); 
     
+    // Auto Generate Sequential APP-ID
     let maxId = 0;
     orders.forEach(o => {
       const match = o.id && o.id.match(/APP-(\d+)$/);
@@ -268,6 +269,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     });
     const orderId = `APP-${String(maxId + 1).padStart(4, '0')}`;
     const dateObj = new Date();
+    // Format Waktu Konsisten: HH:MM
     const timeStr = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
     
     const newOrderData = {
@@ -454,10 +456,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
 }
 
 function MemberPayment({ onCheckStatus, order, userPhone, formatRp }) {
-  const handleConfirmWA = () => {
-    const text = `Halo Admin Tabetai, saya ${order.customer} sudah bayar via QRIS untuk Order ID: ${order.id} sebesar *${formatRp(order.total)}*.`;
-    window.open(`https://wa.me/${ADMIN_WA_NUMBER.replace(/[^\d+]/g, '')}?text=${encodeURIComponent(text)}`, '_blank');
-  };
+  const handleConfirmWA = () => window.open(`https://wa.me/${ADMIN_WA_NUMBER.replace(/[^\d+]/g, '')}?text=${encodeURIComponent(`Halo Admin Tabetai, saya ${order.customer} sudah bayar via QRIS untuk Order ID: ${order.id} sebesar ${formatRp(order.total)}.`)}`, '_blank');
   return (
     <div className="flex-1 flex flex-col bg-white">
       <div className="p-4 bg-white flex items-center border-b border-slate-100"><h1 className="flex-1 text-center font-bold text-lg">Pembayaran</h1></div>
@@ -543,7 +542,7 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 
 
 // ==========================================
-// 3. ADMIN POS VIEW
+// 3. ADMIN POS VIEW (Cashier / Full Width)
 // ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
@@ -612,6 +611,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       }
     });
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
+    
+    // Format Waktu Konsisten: HH:MM
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
@@ -627,13 +628,14 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
+      // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === item.originalId);
         if (menuTarget) {
           const updatedVariants = menuTarget.variants.map(v => v.name === item.variantId ? { ...v, qty: Math.max(0, v.qty - item.qty) } : v);
           const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
           const updates = { variants: updatedVariants };
-          if (totalQty <= 0) updates.isActive = false;
+          if (totalQty <= 0) updates.isActive = false; // Auto Hide
           await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
@@ -652,7 +654,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     } catch (e) { showToast("Gagal menyimpan bill", "error"); }
   };
 
-  // FUNGSI PRINT BLUETOOTH THERMAL (Logo + Layout Baru)
+  // FUNGSI PRINT BLUETOOTH THERMAL (Sesuai Layout Gambar 58mm)
   const handlePrintReceipt = async (order) => {
     if (!navigator.bluetooth) {
       return showToast("Browser/Perangkat ini tidak mendukung Bluetooth Web API", "error");
@@ -682,59 +684,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
       if (!printChar) throw new Error("Tidak menemukan jalur tulis di printer ini.");
 
-      // --- 1. PROSES GAMBAR LOGO KE BITMAP ESC/POS ---
-      let imageBytes = new Uint8Array([]);
-      try {
-        // Menggunakan Raw Github URL untuk kompatibilitas CORS
-        const imgUrl = "https://raw.githubusercontent.com/gillhardjo/tabetai-app/main/public/LOGO-TABETAI-BW-120.png";
-        imageBytes = await new Promise((resolve) => {
-          const img = new Image();
-          img.crossOrigin = "Anonymous";
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            // Lebar harus kelipatan 8 bit
-            const w = Math.floor(img.width / 8) * 8; 
-            const h = img.height;
-            canvas.width = w;
-            canvas.height = h;
-            
-            // Set background putih agar bagian transparan tidak jadi hitam
-            ctx.fillStyle = "white";
-            ctx.fillRect(0, 0, w, h);
-            ctx.drawImage(img, 0, 0, w, h);
-            
-            const imgData = ctx.getImageData(0, 0, w, h);
-            const pixels = imgData.data;
-
-            const bytesPerLine = w / 8;
-            // Perintah GS v 0 0 xL xH yL yH
-            const escPosData = [0x1D, 0x76, 0x30, 0x00, bytesPerLine & 0xFF, (bytesPerLine >> 8) & 0xFF, h & 0xFF, (h >> 8) & 0xFF];
-
-            for (let y = 0; y < h; y++) {
-              for (let x = 0; x < bytesPerLine; x++) {
-                let byte = 0;
-                for (let bit = 0; bit < 8; bit++) {
-                  const pxIdx = (y * w + (x * 8 + bit)) * 4;
-                  const r = pixels[pxIdx], g = pixels[pxIdx+1], b = pixels[pxIdx+2];
-                  // Filter Hitam (jika rata-rata warna gelap)
-                  if ((r + g + b) / 3 < 128) {
-                    byte |= (1 << (7 - bit));
-                  }
-                }
-                escPosData.push(byte);
-              }
-            }
-            resolve(new Uint8Array(escPosData));
-          };
-          img.onerror = () => resolve(new Uint8Array([])); // Skip print gambar jika gagal load
-          img.src = imgUrl;
-        });
-      } catch (e) {
-        console.warn("Gagal load logo:", e);
-      }
-
-      // --- 2. PERSIAPAN TEKS STRUK ---
       const ESC = '\x1B';
       const init = ESC + '@';
       const center = ESC + 'a' + '\x01';
@@ -742,100 +691,89 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
       
-      const lineWidth = 32; // Sesuaikan dengan foto: 32 karakter sangat pas
+      // Lebar Kertas Printer 58mm (Diperketat menjadi 28 karakter sesuai revisi)
+      const lineWidth = 28;
       const lineStr = '-'.repeat(lineWidth) + '\n';
       const dotLineStr = '.'.repeat(lineWidth) + '\n';
       
+      // Fungsi Align Kanan Kiri
       const alignRight = (leftText, rightText) => {
         let l = String(leftText); let r = String(rightText);
         let spaces = lineWidth - l.length - r.length;
         if (spaces < 1) return l + ' ' + r + '\n';
         return l + ' '.repeat(spaces) + r + '\n';
       };
-
-      const shortId = '#' + (order.id.split('-')[1] || order.id);
       
-      // Menggabungkan byte data untuk dikirim ke bluetooth
-      let printData = new Uint8Array([]);
-      const appendData = (newData) => {
-        const temp = new Uint8Array(printData.length + newData.length);
-        temp.set(printData, 0);
-        temp.set(newData, printData.length);
-        printData = temp;
-      };
+      // ---- HEADER ----
+      let receipt = init + center + boldOn + 'tabetai.id\n' + boldOff;
+      receipt += center + 'Oishii Onigiri\n\n';
+      receipt += left + `Order: ${order.customer}\n`;
+      receipt += `No. Resi: ${order.id}\n`;
+      receipt += `Waktu: ${order.date || order.time}\n`;
+      receipt += lineStr;
       
-      const encoder = new TextEncoder();
-
-      // Memulai dokumen (Init & Rata Tengah)
-      appendData(encoder.encode(init + center));
-
-      // Memasukkan Logo Bitmap jika berhasil diload
-      if (imageBytes.length > 0) {
-        appendData(imageBytes);
-        appendData(encoder.encode('\n\n'));
-      }
-
-      // Menyusun sisa string teks
-      let receiptText = boldOn + 'tabetai.id\n\n' + boldOff;
-      receiptText += left + `Order: ${order.customer}\n`;
-      receiptText += `Employee: Admin\n`;
-      receiptText += `POS: Master\n`;
-      receiptText += lineStr;
-      
+      // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        // Limit nama item max 20 char agar tidak menabrak harga di sebelahnya
-        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
+        // Limit nama item agar aman di 28 karakter saat dipasangkan harga
+        let displayName = item.name.length > 16 ? item.name.substring(0, 15) + '.' : item.name;
         
-        receiptText += alignRight(displayName, formatRp(item.price * qty));
-        receiptText += `${qty} x ${formatRp(item.price)}\n`;
+        receipt += alignRight(displayName, formatRp(item.price * qty));
+        receipt += `${qty} x ${formatRp(item.price)}\n`;
         
         const variant = item.variant || item.variantId;
         if (variant && variant !== 'default') {
+          // Pisahkan multi-variant jika ada
           variant.split(',').forEach(v => {
-            receiptText += `  + ${v.trim()}\n`;
+            receipt += `  + ${v.trim()}\n`;
           });
         }
-        if (item.note) receiptText += `  Catatan: ${item.note}\n`;
-        receiptText += '\n'; 
+        if (item.note) receipt += `  Catatan: ${item.note}\n`;
+        receipt += '\n'; // Spasi antar item
       });
       
-      receiptText += lineStr;
+      receipt += lineStr;
       
+      // ---- DISKON ----
       if (order.discount && order.discount.value > 0) {
-        receiptText += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value));
-        receiptText += alignRight(`Diskon (${order.discount.code})`, '-' + formatRp(order.discount.value));
-        receiptText += lineStr;
+        receipt += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value));
+        receipt += alignRight(`Diskon (${order.discount.code})`, '-' + formatRp(order.discount.value));
+        receipt += lineStr;
       }
 
+      // ---- TOTAL & PAYMENT ----
       let totalLine = alignRight('Total', formatRp(order.total));
-      receiptText += boldOn + totalLine.replace('\n', '') + boldOff + '\n\n';
+      receipt += boldOn + totalLine.replace('\n', '') + boldOff + '\n\n';
       
-      receiptText += alignRight(order.payment || 'QRIS', formatRp(order.total));
-      receiptText += dotLineStr;
+      receipt += alignRight(order.payment || 'QRIS', formatRp(order.total));
+      receipt += dotLineStr;
       
-      receiptText += center + '**Arigatou**\n';
-      receiptText += 'Please consume it immediately on\n';
-      receiptText += 'the day it is ordered or store\n';
-      receiptText += 'it in the refrigerator for a\n';
-      receiptText += 'maximum of 3 days\n\n';
+      // ---- FOOTER ----
+      receipt += center + '**Arigatou**\n';
+      receipt += 'Please consume it immediately\n';
+      receipt += 'on the day it is ordered or\n';
+      receipt += 'store it in the refrigerator\n';
+      receipt += 'for a maximum of 3 days\n\n';
       
-      receiptText += 'WA : 0812-8555-7779 (text only)\n';
-      receiptText += 'IG : @tabetaii.id\n\n';
+      receipt += 'WA : 0812-8555-7779\n';
+      receipt += '(text only)\n';
+      receipt += 'IG : @tabetaii.id\n\n';
 
+      // ---- BOTTOM DATETIME & ID ----
       const orderDate = order.date ? order.date.split(',')[0].trim() : '';
       const orderTime = order.time || '';
       const dateTime = `${orderDate} ${orderTime}`.trim();
+      const shortId = '#' + (order.id.split('-')[1] || order.id); 
       
-      receiptText += left + alignRight(dateTime, shortId);
-      receiptText += '\n\n\n\n';
+      receipt += left + alignRight(dateTime, shortId);
+      receipt += '\n\n\n\n';
 
-      appendData(encoder.encode(receiptText));
-
-      // Mengirimkan Byte secara perlahan (Chunking 256 byte) agar buffer printer tidak penuh
+      // --- EXECUTE PRINT ---
+      const encoder = new TextEncoder();
+      const data = encoder.encode(receipt);
       const chunkSize = 256;
-      for (let i = 0; i < printData.length; i += chunkSize) {
-        await printChar.writeValue(printData.slice(i, i + chunkSize));
+      for (let i = 0; i < data.length; i += chunkSize) {
+        await printChar.writeValue(data.slice(i, i + chunkSize));
       }
       
       showToast("Struk berhasil dicetak!", "success");
@@ -935,6 +873,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} db={db} formatRp={formatRp} showToast={showToast} />}
 
+        {/* MODALS KASIR */}
         {checkoutModal && (
           <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
             <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden">
@@ -966,6 +905,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     </div>
   );
 }
+
+// --- Admin Features Components ---
 
 function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, onPrint }) {
   const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
@@ -1000,7 +941,7 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
               const updatedVariants = menuTarget.variants.map(v => v.name === (item.variant || item.variantId) ? { ...v, qty: Math.max(0, v.qty - (item.quantity||item.qty)) } : v);
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
-              if (totalQty === 0) menuUpdates.isActive = false; 
+              if (totalQty === 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
