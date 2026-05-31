@@ -710,20 +710,25 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         return l + ' '.repeat(spaces) + r + '\n';
       };
 
-      // --- FILTER WAKTU (MEMAKSA JADI HH:MM) ---
-      let timeFormatted = '';
-      if (order.time) {
-        // Ambil hanya 5 huruf pertama (Misal "14:30:45" menjadi "14:30")
-        timeFormatted = order.time.replace('.', ':').substring(0, 5);
-      } else if (order.timestamp) {
-        timeFormatted = new Date(order.timestamp).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
-      }
-
-      let dateFormatted = '';
-      if (order.date) {
-        dateFormatted = order.date.split(',')[0].trim();
-      } else if (order.timestamp) {
-        dateFormatted = new Date(order.timestamp).toLocaleDateString('id-ID');
+      // --- FORMAT WAKTU (MEMAKSA JADI DD/MM/YY HH:MM) ---
+      let formattedDateTime = '';
+      if (order.timestamp) {
+        const d = new Date(order.timestamp);
+        const DD = String(d.getDate()).padStart(2, '0');
+        const MM = String(d.getMonth() + 1).padStart(2, '0');
+        const YY = String(d.getFullYear()).slice(-2); // Ambil 2 digit terakhir tahun
+        const HH = String(d.getHours()).padStart(2, '0');
+        const MIN = String(d.getMinutes()).padStart(2, '0');
+        formattedDateTime = `${DD}/${MM}/${YY} ${HH}:${MIN}`;
+      } else {
+        // Fallback jika tidak ada timestamp (untuk pesanan sangat lama)
+        let timeStr = order.time ? order.time.replace('.', ':').substring(0, 5) : '';
+        let dateStr = order.date ? order.date.split(',')[0].trim() : '';
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+           dateStr = `${parts[0].padStart(2,'0')}/${parts[1].padStart(2,'0')}/${parts[2].slice(-2)}`;
+        }
+        formattedDateTime = `${dateStr} ${timeStr}`.trim();
       }
       
       // ---- HEADER ----
@@ -731,20 +736,22 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       receiptText += 'oishii onigiri\n\n';
       receiptText += left + `Order: ${order.customer}\n`;
       receiptText += `No. Resi: ${order.id}\n`;
-      receiptText += `Waktu: ${timeFormatted}\n`;
+      receiptText += `Waktu: ${formattedDateTime}\n`;
       receiptText += lineStr;
       
       // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        // Limit nama item max agar tidak menabrak harga pada lebar 28 char
-        let displayName = item.name.length > 15 ? item.name.substring(0, 14) + '.' : item.name;
+        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
         
-        receiptText += alignRight(displayName, formatRp(item.price * qty));
-        
-        if (item.note) receiptText += `  Catatan: ${item.note}\n`;
-        
-        receiptText += `${qty} x ${formatRp(item.price)}\n`;
+        if (item.note) {
+          receiptText += `${displayName}\n`;
+          receiptText += `  Catatan: ${item.note}\n`;
+          receiptText += alignRight(`${qty} x ${formatRp(item.price)}`, formatRp(item.price * qty));
+        } else {
+          receiptText += alignRight(displayName, formatRp(item.price * qty));
+          receiptText += `${qty} x ${formatRp(item.price)}\n`;
+        }
         
         const variant = item.variant || item.variantId;
         if (variant && variant !== 'default') {
@@ -753,7 +760,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           });
         }
         
-        receiptText += ' \n'; // Jarak antar makanan
+        receiptText += ' \n'; 
       });
       
       receiptText += lineStr;
@@ -772,7 +779,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       receiptText += alignRight(order.payment || 'QRIS', formatRp(order.total));
       receiptText += dotLineStr;
       
-      // ---- FOOTER (Disesuaikan untuk lebar 28) ----
+      // ---- FOOTER ----
       receiptText += center + '**Arigatou**\n';
       receiptText += 'Please consume it\n';
       receiptText += 'immediately on the day\n';
@@ -785,10 +792,9 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       receiptText += 'IG : @tabetaii.id\n\n';
 
       // ---- BOTTOM DATETIME & ID ----
-      const dateTime = `${dateFormatted} ${timeFormatted}`.trim();
       const shortId = '#' + (order.id.split('-')[1] || order.id);
       
-      receiptText += left + alignRight(dateTime, shortId);
+      receiptText += left + alignRight(formattedDateTime, shortId);
       receiptText += '\n\n\n\n';
 
       // --- EXECUTE PRINT ---
