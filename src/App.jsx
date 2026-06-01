@@ -194,8 +194,8 @@ function GuestView({ onLogin, onRegister }) {
         <div className="w-32 h-32 mx-auto mb-4 shadow-xl rounded-full overflow-hidden bg-white border-4 border-white flex items-center justify-center">
           <img src={logoImageUrl} alt="Tabetai Logo" className="w-full h-full object-cover" onError={(e) => { e.target.src = 'https://placehold.co/200x200/ef4444/ffffff?text=Tabetai'; }} />
         </div>
-        <h1 className="text-3xl font-black text-red-600 tracking-tight mt-2">TABETAI</h1>
-        <p className="text-red-900/60 font-medium mt-1 text-sm">Oishii Onigiri & Ramen</p>
+        <h1 className="text-3xl font-black text-red-600 tracking-tight mt-2">TABETAI.ID</h1>
+        <p className="text-red-900/60 font-medium mt-1 text-sm">Oishii Onigiri</p>
       </div>
       
       <div className="bg-white p-6 rounded-3xl shadow-lg shadow-red-100/50 border border-red-50 animate-in slide-in-from-bottom-8">
