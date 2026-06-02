@@ -621,7 +621,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const filteredMenu = menus.filter(item => {
     const matchSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
     return matchSearch && item.isActive !== false;
-  });
+  }).sort((a, b) => (a.orderPriority || 99) - (b.orderPriority || 99));
 
   const addToCartFinal = (item, variantName, quantity = 1, note = '') => {
     const itemPrice = item.price; 
@@ -1184,12 +1184,24 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
     </div>
   );
 
+  const sortedMenus = [...menus].sort((a, b) => {
+    const aActive = a.isActive !== false;
+    const bActive = b.isActive !== false;
+    if (aActive && !bActive) return -1;
+    if (!aActive && bActive) return 1;
+    return (a.orderPriority || 99) - (b.orderPriority || 99);
+  });
+
   return (
     <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Manajemen Menu</h2><button onClick={()=>setForm({name:'', desc:'', price:'', image:'', isActive:true, orderPriority:99, variants:[{name:'Reguler',qty:100}]})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2"><Plus size={18}/> Tambah</button></div>
       <div className="space-y-3">
-        {menus.map(menu => (
+        {sortedMenus.map((menu, index) => (
           <div key={menu.dbId} className={`bg-white p-4 rounded-2xl flex justify-between items-center ${menu.isActive===false?'opacity-50 grayscale':''}`}>
-            <div className="flex gap-4 items-center"><img src={menu.image} className="w-16 h-16 rounded-xl object-cover" /><div><h3 className="font-bold">{menu.name} {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider ml-2">Hidden</span>}</h3><p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p></div></div>
+            <div className="flex gap-3 items-center">
+              <span className="font-bold text-slate-400 text-lg w-6 text-center">{index + 1}</span>
+              <img src={menu.image} className="w-16 h-16 rounded-xl object-cover" />
+              <div><h3 className="font-bold">{menu.name} {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider ml-2">Hidden</span>}</h3><p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p></div>
+            </div>
             <div className="flex gap-2">
               <button onClick={() => handleToggleVisibility(menu.dbId, menu.isActive !== false)} className={`p-2 rounded-lg ${menu.isActive !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
                 {menu.isActive !== false ? <Eye size={18} /> : <EyeOff size={18} />}
