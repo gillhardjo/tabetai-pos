@@ -1,17 +1,13 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   ShoppingCart, MessageCircle, ChevronLeft, Plus, Minus, X, Download, Clock, Store, 
   User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore';
 
-// ==========================================
-// 1. FIREBASE CONFIGURATION
-// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAwsfBMS0_9gbPayYU-Ry2iFNfF8TMMKVU",
   authDomain: "tabetai-app-v103.firebaseapp.com",
@@ -26,7 +22,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Fungsi Helper Path Firebase
 const getColRef = (colName) => {
   let name = colName;
   if (name === 'menu') name = 'menus';
@@ -41,9 +36,6 @@ const getDocRef = (colName, docId) => {
   return doc(db, name, docId);
 };
 
-// ==========================================
-// CONSTANTS & UTILS
-// ==========================================
 const ADMIN_CREDENTIALS = { username: 'admin', phone: '2131' };
 const ADMIN_WA_NUMBER = "6281285557779"; 
 const qrisImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public/qris.png?raw=true";
@@ -64,9 +56,6 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   return `https://wa.me/${waNumber}?text=${text}`;
 };
 
-// ==========================================
-// MAIN APP COMPONENT (ROOT)
-// ==========================================
 export default function TabetaiSuperApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
@@ -78,9 +67,19 @@ export default function TabetaiSuperApp() {
   const [promos, setPromos] = useState([]);
   const [savedBills, setSavedBills] = useState([]);
   
-  // Navigation & User State
-  const [role, setRole] = useState('guest'); // 'guest' | 'member' | 'admin'
-  const [currentUser, setCurrentUser] = useState(null);
+  // Navigation & User State (PERSISTENT LOGIC)
+  const [role, setRole] = useState(() => localStorage.getItem('tbt_role') || 'guest'); 
+  const [currentUser, setCurrentUser] = useState(() => {
+    const saved = localStorage.getItem('tbt_user');
+    return saved ? JSON.parse(saved) : null;
+  });
+
+  // Save session state locally
+  useEffect(() => {
+    localStorage.setItem('tbt_role', role);
+    if (currentUser) localStorage.setItem('tbt_user', JSON.stringify(currentUser));
+    else localStorage.removeItem('tbt_user');
+  }, [role, currentUser]);
   
   // Toast Notification
   const [toast, setToast] = useState(null);
@@ -95,7 +94,6 @@ export default function TabetaiSuperApp() {
         await signInAnonymously(auth);
         setAuthError(null);
       } catch (error) {
-        console.error("Auth Error:", error);
         setAuthError(error.message);
       } finally {
         setIsAuthReady(true);
@@ -106,14 +104,11 @@ export default function TabetaiSuperApp() {
 
   useEffect(() => {
     if (!isAuthReady) return;
-    
     const unsubMembers = onSnapshot(getColRef('members'), snap => setMembers(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubMenus = onSnapshot(getColRef('menu'), snap => setMenus(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    
-    // Auto-sort by timestamp on fetch
-    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
+    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })))); // Di-sort di dalam useMemo Admin
     const unsubPromos = onSnapshot(getColRef('promos'), snap => setPromos(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id })).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0))));
+    const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     
     return () => { unsubMembers(); unsubMenus(); unsubOrders(); unsubPromos(); unsubBills(); };
   }, [isAuthReady]);
@@ -152,6 +147,10 @@ export default function TabetaiSuperApp() {
   const handleLogout = () => {
     setRole('guest');
     setCurrentUser(null);
+    localStorage.removeItem('tbt_role');
+    localStorage.removeItem('tbt_user');
+    localStorage.removeItem('tbt_cart_member');
+    localStorage.removeItem('tbt_cart_admin');
   };
 
   const activeUser = currentUser ? members.find(m => m.phone === currentUser.phone && m.name.toLowerCase() === currentUser.name.toLowerCase()) || currentUser : null;
@@ -173,10 +172,6 @@ export default function TabetaiSuperApp() {
   );
 }
 
-
-// ==========================================
-// 1. GUEST VIEW (Login & Register)
-// ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
   const [name, setName] = useState('');
@@ -230,13 +225,16 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
-
-// ==========================================
-// 2. MEMBER APP VIEW (Customer)
-// ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home'); 
-  const [cart, setCart] = useState([]);
+  
+  // Persistent Cart for Members
+  const [cart, setCart] = useState(() => {
+    const saved = localStorage.getItem('tbt_cart_member');
+    return saved ? JSON.parse(saved) : [];
+  });
+  useEffect(() => { localStorage.setItem('tbt_cart_member', JSON.stringify(cart)); }, [cart]);
+  
   const [selectedItem, setSelectedItem] = useState(null);
 
   const getCartTotal = () => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
@@ -259,7 +257,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const placeOrder = async (finalTotal, discountObj) => {
     const earnedPoints = Math.floor(finalTotal * 0.1); 
     
-    // Auto Generate Sequential APP-ID
     let maxId = 0;
     orders.forEach(o => {
       const match = o.id && o.id.match(/APP-(\d+)$/);
@@ -270,7 +267,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     });
     const orderId = `APP-${String(maxId + 1).padStart(4, '0')}`;
     const dateObj = new Date();
-    // Format Waktu Konsisten: HH:MM
     const timeStr = dateObj.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
     
     const newOrderData = {
@@ -302,8 +298,21 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     }
   };
 
+  const handleCancelOrder = async (orderId) => {
+    if (window.confirm("Apakah Anda yakin ingin membatalkan pesanan ini?")) {
+      try {
+        await updateDoc(getDocRef('transactions', orderId), { status: 'Dibatalkan' });
+        showToast("Pesanan berhasil dibatalkan", "info");
+      } catch (e) {
+        showToast("Gagal membatalkan pesanan", "error");
+      }
+    }
+  };
+
   const activeMenus = menus.filter(m => m.isActive !== false).sort((a,b) => (a.orderPriority || 99) - (b.orderPriority || 99));
-  const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone);
+  
+  // Sort user orders purely by timestamp descending for History
+  const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
   return (
     <div className="w-full max-w-md bg-slate-50 min-h-screen relative shadow-2xl flex flex-col overflow-hidden">
@@ -355,6 +364,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
                 </div>
                 <div className="flex-1 flex flex-col">
                   <h3 className="font-bold text-slate-800">{item.name}</h3>
+                  {item.desc && <p className="text-xs text-slate-500 mt-1 line-clamp-2 leading-relaxed">{item.desc}</p>}
                   <div className="mt-auto flex items-center justify-between pt-3">
                     <span className="font-bold text-red-600">{formatRp(item.price)}</span>
                     <button onClick={() => setSelectedItem(item)} className="bg-red-50 text-red-600 px-4 py-1.5 rounded-full font-semibold text-sm hover:bg-red-100">Tambah</button>
@@ -379,11 +389,11 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       )}
 
       {view === 'payment' && myOrders[0] && (
-        <MemberPayment order={myOrders[0]} userPhone={user.phone} onCheckStatus={() => setView('status')} formatRp={formatRp} />
+        <MemberPayment order={myOrders[0]} userPhone={user.phone} onCheckStatus={() => setView('status')} onBackHome={() => setView('home')} formatRp={formatRp} />
       )}
 
       {view === 'status' && (
-        <MemberStatus orders={myOrders} onBack={() => setView('home')} userPhone={user.phone} formatRp={formatRp} />
+        <MemberStatus orders={myOrders} onBack={() => setView('home')} userPhone={user.phone} formatRp={formatRp} onCancelOrder={handleCancelOrder} />
       )}
 
       {selectedItem && (
@@ -456,7 +466,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
   );
 }
 
-function MemberPayment({ onCheckStatus, order, userPhone, formatRp }) {
+function MemberPayment({ onCheckStatus, onBackHome, order, userPhone, formatRp }) {
   const handleConfirmWA = () => {
     let waNumber = ADMIN_WA_NUMBER.replace(/[^\d+]/g, ''); 
     const text = `Halo Admin Tabetai, saya ${order.customer} sudah melakukan pembayaran via QRIS untuk Order ID: ${order.id} sebesar *${formatRp(order.total)}*. Mohon dicek ya!`;
@@ -474,31 +484,35 @@ function MemberPayment({ onCheckStatus, order, userPhone, formatRp }) {
         </div>
         <button onClick={() => window.open(generateInvoiceWAUrl(order, userPhone), '_blank')} className="text-blue-600 font-semibold bg-blue-50 py-3 px-6 rounded-xl text-sm mb-10 flex gap-2"><ScrollText size={16} /> Download Invoice</button>
         <div className="w-full mt-auto space-y-3">
-          <button onClick={handleConfirmWA} className="w-full bg-green-500 text-white font-bold py-4 rounded-xl flex justify-center gap-2"><MessageCircle size={20} /> Konfirmasi WA</button>
+          <button onClick={handleConfirmWA} className="w-full bg-green-500 text-white font-bold py-4 rounded-xl flex justify-center gap-2"><MessageCircle size={20} /> Konfirmasi pesanan via WA</button>
           <button onClick={onCheckStatus} className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl">Cek Status Pesanan</button>
+          <button onClick={onBackHome} className="w-full bg-slate-100 text-slate-800 font-bold py-4 rounded-xl mt-2">Kembali ke Beranda</button>
         </div>
       </div>
     </div>
   );
 }
 
-function MemberStatus({ orders, onBack, userPhone, formatRp }) {
+function MemberStatus({ orders, onBack, userPhone, formatRp, onCancelOrder }) {
   return (
     <div className="flex-1 flex flex-col bg-slate-50 relative pb-24">
       <div className="flex items-center p-4 bg-white sticky top-0 z-20 shadow-sm border-b border-slate-100"><button onClick={onBack} className="p-2"><ChevronLeft size={24} /></button><h1 className="flex-1 text-center font-bold text-lg pr-10">Riwayat Pesanan</h1></div>
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {orders.map((order) => (
           <div key={order.dbId} className="bg-white rounded-2xl shadow-sm border border-slate-100 p-5 relative overflow-hidden">
-            <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'Selesai' ? 'bg-green-500' : order.status === 'Diproses' ? 'bg-blue-500' : 'bg-orange-500'}`} />
+            <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'Selesai' ? 'bg-green-500' : order.status === 'Diproses' ? 'bg-blue-500' : order.status === 'Dibatalkan' ? 'bg-red-500' : 'bg-orange-500'}`} />
             <div className="flex justify-between items-start mb-3">
               <div><p className="text-xs text-slate-500 mb-0.5">{order.time} {order.date && `• ${order.date.split(',')[0]}`}</p><p className="font-bold text-slate-800 text-sm">ID: {order.id}</p></div>
-              <span className={`text-xs font-bold px-3 py-1 rounded-full ${order.status === 'Selesai' ? 'bg-green-100 text-green-700' : order.status === 'Diproses' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'}`}>{order.status}</span>
+              <span className={`text-xs font-bold px-3 py-1 rounded-full ${order.status === 'Selesai' ? 'bg-green-100 text-green-700' : order.status === 'Diproses' ? 'bg-blue-100 text-blue-700' : order.status === 'Dibatalkan' ? 'bg-red-100 text-red-700' : 'bg-orange-100 text-orange-700'}`}>{order.status}</span>
             </div>
             <div className="border-t border-b border-slate-50 py-3 my-3 text-sm text-slate-600 space-y-1">
               {order.items.map((item, i) => <div key={i}><span className="font-semibold text-slate-800">{(item.quantity || item.qty)}x {item.name}</span></div>)}
             </div>
             <div className="flex justify-between items-center mb-4"><span className="text-sm text-slate-500">Total</span><span className="font-bold text-slate-800">{formatRp(order.total)}</span></div>
             <button onClick={() => window.open(generateInvoiceWAUrl(order, userPhone), '_blank')} className="w-full flex justify-center gap-2 text-blue-600 font-semibold border border-blue-100 bg-blue-50 py-2 rounded-lg text-sm"><Download size={14} /> Invoice WA</button>
+            {(order.status === 'Menunggu Pembayaran' || order.status === 'Pending') && (
+               <button onClick={() => onCancelOrder(order.dbId)} className="w-full mt-2 flex justify-center gap-2 text-red-600 font-semibold border border-red-100 bg-red-50 py-2 rounded-lg text-sm transition-colors hover:bg-red-100"><X size={14} /> Batalkan Pesanan</button>
+            )}
           </div>
         ))}
       </div>
@@ -517,13 +531,11 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
     <div className="fixed inset-0 z-50 flex justify-center items-end bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-t-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full overflow-hidden">
         
-        {/* HERO IMAGE BESAR */}
         <div className="relative w-full h-56 md:h-64 bg-slate-100 shrink-0">
           <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-black/40 backdrop-blur-md text-white rounded-full z-10 hover:bg-black/60 transition-colors"><X size={20} /></button>
           <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
         </div>
         
-        {/* INFO JUDUL & DESKRIPSI */}
         <div className="p-6 border-b border-slate-100 shrink-0 bg-white z-10">
           <h2 className="font-bold text-2xl text-slate-800">{item.name}</h2>
           {item.desc && <p className="text-sm text-slate-500 mt-2 leading-relaxed">{item.desc}</p>}
@@ -541,7 +553,7 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
             ))}
           </div>
           <h3 className="font-bold text-slate-800 mb-3 text-sm">Catatan Tambahan</h3>
-          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Contoh: Pisah kuah..." className="w-full p-4 border border-slate-200 rounded-xl focus:border-red-500 outline-none text-sm resize-none" rows="2" />
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Contoh: pedas sekali..." className="w-full p-4 border border-slate-200 rounded-xl focus:border-red-500 outline-none text-sm resize-none" rows="2" />
         </div>
         <div className="p-4 bg-white border-t border-slate-100 flex items-center gap-4 pb-8">
           <div className="flex items-center gap-4 bg-slate-100 p-2 rounded-xl">
@@ -563,14 +575,18 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
   
-  // Kasir Local State
-  const [cart, setCart] = useState([]);
+  // Persistent Cart for Admin
+  const [cart, setCart] = useState(() => {
+    const saved = localStorage.getItem('tbt_cart_admin');
+    return saved ? JSON.parse(saved) : [];
+  });
+  useEffect(() => { localStorage.setItem('tbt_cart_admin', JSON.stringify(cart)); }, [cart]);
+  
   const [searchQuery, setSearchQuery] = useState("");
   const [promoCode, setPromoCode] = useState("");
   const [discount, setDiscount] = useState(0);
   const [appliedPromo, setAppliedPromo] = useState(null);
 
-  // Modals POS
   const [checkoutModal, setCheckoutModal] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState(''); 
   const [cashAmount, setCashAmount] = useState('');
@@ -579,6 +595,18 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const [billName, setBillName] = useState("");
 
   const pendingCount = orders.filter(o => o.status === 'Menunggu Pembayaran' || o.status === 'Pending').length;
+  
+  // NOTIFICATION SOUND LOGIC
+  const prevPendingCount = useRef(pendingCount);
+  useEffect(() => {
+    if (pendingCount > prevPendingCount.current) {
+      try {
+        const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+        audio.play().catch(e => console.log('Audio autoplay blocked by browser', e));
+      } catch (e) {}
+    }
+    prevPendingCount.current = pendingCount;
+  }, [pendingCount]);
 
   const filteredMenu = menus.filter(item => {
     const matchSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -628,7 +656,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     });
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
     
-    // Format Waktu Konsisten: HH:MM
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
@@ -644,14 +671,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
-      // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === item.originalId);
         if (menuTarget) {
           const updatedVariants = menuTarget.variants.map(v => v.name === item.variantId ? { ...v, qty: Math.max(0, v.qty - item.qty) } : v);
           const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
           const updates = { variants: updatedVariants };
-          if (totalQty <= 0) updates.isActive = false; // Auto Hide
+          if (totalQty <= 0) updates.isActive = false; 
           await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
@@ -670,30 +696,23 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     } catch (e) { showToast("Gagal menyimpan bill", "error"); }
   };
 
-  // FUNGSI PRINT BLUETOOTH THERMAL
   const handlePrintReceipt = async (order) => {
     if (!navigator.bluetooth) {
       return showToast("Browser/Perangkat ini tidak mendukung Bluetooth Web API", "error");
     }
-    
     try {
       showToast("Mencari Printer Bluetooth...", "info");
       const device = await navigator.bluetooth.requestDevice({
         acceptAllDevices: true,
         optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] 
       });
-      
       const server = await device.gatt.connect();
       const services = await server.getPrimaryServices();
       let printChar = null;
-      
       for (const service of services) {
         const chars = await service.getCharacteristics();
         for (const char of chars) {
-          if (char.properties.write || char.properties.writeWithoutResponse) {
-            printChar = char;
-            break;
-          }
+          if (char.properties.write || char.properties.writeWithoutResponse) { printChar = char; break; }
         }
         if (printChar) break;
       }
@@ -707,12 +726,10 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       const boldOn = ESC + 'E' + '\x01';
       const boldOff = ESC + 'E' + '\x00';
       
-      // Lebar Kertas Printer 58mm diset presisi ke 28 Karakter
       const lineWidth = 28;
       const lineStr = '-'.repeat(lineWidth) + '\n';
       const dotLineStr = '.'.repeat(lineWidth) + '\n';
       
-      // Fungsi Align Kanan Kiri
       const alignRight = (leftText, rightText) => {
         let l = String(leftText); let r = String(rightText);
         let spaces = lineWidth - l.length - r.length;
@@ -720,39 +737,35 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         return l + ' '.repeat(spaces) + r + '\n';
       };
 
-      // --- FORMAT WAKTU (MEMAKSA JADI DD/MM/YY HH:MM) ---
+      // --- FILTER WAKTU (DD/MM/YY HH:MM) ---
       let formattedDateTime = '';
       if (order.timestamp) {
         const d = new Date(order.timestamp);
         const DD = String(d.getDate()).padStart(2, '0');
         const MM = String(d.getMonth() + 1).padStart(2, '0');
-        const YY = String(d.getFullYear()).slice(-2); // Ambil 2 digit terakhir tahun
+        const YY = String(d.getFullYear()).slice(-2);
         const HH = String(d.getHours()).padStart(2, '0');
         const MIN = String(d.getMinutes()).padStart(2, '0');
         formattedDateTime = `${DD}/${MM}/${YY} ${HH}:${MIN}`;
       } else {
-        // Fallback jika tidak ada timestamp (untuk pesanan sangat lama)
         let timeStr = order.time ? order.time.replace('.', ':').substring(0, 5) : '';
         let dateStr = order.date ? order.date.split(',')[0].trim() : '';
         const parts = dateStr.split('/');
-        if (parts.length === 3) {
-           dateStr = `${parts[0].padStart(2,'0')}/${parts[1].padStart(2,'0')}/${parts[2].slice(-2)}`;
-        }
+        if (parts.length === 3) dateStr = `${parts[0].padStart(2,'0')}/${parts[1].padStart(2,'0')}/${parts[2].slice(-2)}`;
         formattedDateTime = `${dateStr} ${timeStr}`.trim();
       }
       
-      // ---- HEADER ----
       let receiptText = init + center + boldOn + 'tabetai.id\n' + boldOff;
       receiptText += 'oishii onigiri\n\n';
       receiptText += left + `Order: ${order.customer}\n`;
       receiptText += `No. Resi: ${order.id}\n`;
-      receiptText += `Waktu: ${formattedDateTime}\n`;
+      receiptText += `Employee: Admin\n`;
+      receiptText += `POS: Master\n`;
       receiptText += lineStr;
       
-      // ---- ITEMS ----
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
-        let displayName = item.name.length > 20 ? item.name.substring(0, 19) + '.' : item.name;
+        let displayName = item.name.length > 15 ? item.name.substring(0, 14) + '.' : item.name;
         
         if (item.note) {
           receiptText += `${displayName}\n`;
@@ -769,27 +782,23 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
             receiptText += `  + ${v.trim()}\n`;
           });
         }
-        
         receiptText += ' \n'; 
       });
       
       receiptText += lineStr;
       
-      // ---- DISKON ----
       if (order.discount && order.discount.value > 0) {
         receiptText += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value));
         receiptText += alignRight(`Diskon`, '-' + formatRp(order.discount.value));
         receiptText += lineStr;
       }
 
-      // ---- TOTAL & PAYMENT ----
       let totalLine = alignRight('Total', formatRp(order.total));
       receiptText += boldOn + totalLine.replace('\n', '') + boldOff + '\n\n';
       
       receiptText += alignRight(order.payment || 'QRIS', formatRp(order.total));
       receiptText += dotLineStr;
       
-      // ---- FOOTER ----
       receiptText += center + '**Arigatou**\n';
       receiptText += 'Please consume it\n';
       receiptText += 'immediately on the day\n';
@@ -801,20 +810,16 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       receiptText += '(text only)\n';
       receiptText += 'IG : @tabetaii.id\n\n';
 
-      // ---- BOTTOM DATETIME & ID ----
       const shortId = '#' + (order.id.split('-')[1] || order.id);
-      
       receiptText += left + alignRight(formattedDateTime, shortId);
       receiptText += '\n\n\n\n';
 
-      // --- EXECUTE PRINT ---
       const encoder = new TextEncoder();
       const printData = encoder.encode(receiptText);
       const chunkSize = 256;
       for (let i = 0; i < printData.length; i += chunkSize) {
         await printChar.writeValue(printData.slice(i, i + chunkSize));
       }
-      
       showToast("Struk berhasil dicetak!", "success");
     } catch (error) {
       console.error(error);
@@ -828,7 +833,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
   return (
     <div className="flex h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden w-full">
-      {/* SIDEBAR ADMIN POS */}
       <div className="w-24 md:w-64 bg-white shadow-xl flex flex-col justify-between z-10">
         <div>
           <div className="p-4 md:p-6 flex items-center justify-center md:justify-start gap-3 border-b border-slate-100">
@@ -855,10 +859,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         </div>
       </div>
 
-      {/* KONTEN KANAN ADMIN POS */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
-        
-        {/* KASIR */}
         {activeTab === 'kasir' && (
           <div className="flex-1 flex overflow-hidden bg-slate-50">
             <div className="flex-[2] flex flex-col h-full border-r border-slate-200">
@@ -876,7 +877,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
               </div>
             </div>
 
-            {/* KERANJANG KASIR */}
             <div className="w-[350px] lg:w-[400px] bg-white flex flex-col h-full">
               <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h2 className="text-xl font-bold">Pesanan <span className="bg-red-100 text-red-600 text-sm py-0.5 px-2 rounded-full">{cart.reduce((a,c)=>a+c.qty,0)}</span></h2>{cart.length>0 && <button onClick={()=>setCart([])} className="text-red-500 text-sm font-semibold">Kosongkan</button>}</div>
               <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3">
@@ -917,7 +917,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} db={db} formatRp={formatRp} showToast={showToast} />}
 
-        {/* MODALS KASIR */}
         {checkoutModal && (
           <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
             <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden">
@@ -942,7 +941,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
-        {/* Modal Varian Untuk Kasir */}
         {variantModal && (
           <VariantModal item={variantModal} onClose={() => setVariantModal(false)} onAdd={addToCartFinal} formatRp={formatRp} />
         )}
@@ -950,8 +948,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     </div>
   );
 }
-
-// --- Admin Features Components ---
 
 function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, onPrint }) {
   const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
@@ -986,7 +982,7 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
               const updatedVariants = menuTarget.variants.map(v => v.name === (item.variant || item.variantId) ? { ...v, qty: Math.max(0, v.qty - (item.quantity||item.qty)) } : v);
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
-              if (totalQty <= 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
+              if (totalQty <= 0) menuUpdates.isActive = false; 
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
@@ -1009,7 +1005,6 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
         const [y, m, d] = filterDate.split('-');
         const idFormat1 = `${d}/${m}/${y}`;
         const idFormat2 = `${parseInt(d)}/${parseInt(m)}/${y}`;
-        
         matchDate = o.filterDateKey === filterDate || (o.date && (o.date.includes(idFormat1) || o.date.includes(idFormat2)));
       }
 
@@ -1205,11 +1200,10 @@ function AdminMemberManager({ members, db, showToast }) {
   const handleSave = async (e) => {
     e.preventDefault();
     try {
-      // getDocRef terhubung ke koleksi 'members' seperti yang diatur di awal file
       await updateDoc(getDocRef('members', editingMember.dbId), {
         name: editingMember.name,
         phone: editingMember.phone,
-        points: Number(editingMember.points) // Pastikan poin tersimpan sebagai angka
+        points: Number(editingMember.points) 
       });
       setEditingMember(null);
       showToast("Data member berhasil diperbarui!", "success");
@@ -1241,7 +1235,6 @@ function AdminMemberManager({ members, db, showToast }) {
         ))}
       </div>
 
-      {/* MODAL EDIT MEMBER */}
       {editingMember && (
         <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4 backdrop-blur-sm">
           <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
