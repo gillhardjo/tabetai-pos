@@ -602,6 +602,16 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     if (pendingCount > prevPendingCount.current) {
       try {
         const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+        let playCount = 0;
+        const maxPlays = 5;
+
+        audio.onended = () => {
+          playCount++;
+          if (playCount < maxPlays) {
+            audio.play().catch(e => console.log('Audio autoplay blocked by browser', e));
+          }
+        };
+
         audio.play().catch(e => console.log('Audio autoplay blocked by browser', e));
       } catch (e) {}
     }
