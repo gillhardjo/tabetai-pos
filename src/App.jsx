@@ -6,7 +6,7 @@ import {
 
 // --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
 // ==========================================
@@ -62,6 +62,46 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   if (waNumber.startsWith('0')) waNumber = '62' + waNumber.substring(1);
   if (waNumber.startsWith('+')) waNumber = waNumber.substring(1);
   return `https://wa.me/${waNumber}?text=${text}`;
+};
+
+// Fungsi Pintar Hitung Diskon Berdasarkan Menu, Batas Maksimal, dan Minimal QTY
+const calculatePromoDiscount = (cart, promo) => {
+  if (!promo) return 0;
+  let eligibleSubtotal = 0;
+  let eligibleQty = 0;
+  
+  cart.forEach(item => {
+    const menuId = item.originalId || item.dbId || item.id;
+    const qty = item.qty || item.quantity || 1;
+    
+    // Cek apakah item ini masuk ke dalam daftar promo
+    const isApplicable = !promo.applicableMenus || promo.applicableMenus.includes('all') || promo.applicableMenus.includes(menuId);
+    if (isApplicable) {
+      eligibleSubtotal += (item.price * qty);
+      eligibleQty += qty;
+    }
+  });
+
+  // Validasi Minimal Qty Pembelian
+  if (promo.minQty && promo.minQty > 0 && eligibleQty < promo.minQty) {
+    return 0; // Jika tidak memenuhi batas kuantitas minimum
+  }
+
+  if (eligibleSubtotal === 0) return 0; // Jika tidak ada makanan yang sesuai promo
+
+  let discAmount = 0;
+  if (promo.type === 'percent') {
+    discAmount = (eligibleSubtotal * promo.value) / 100;
+    // Terapkan batasan maksimal diskon jika disetel
+    if (promo.maxDiscount && promo.maxDiscount > 0) {
+      discAmount = Math.min(discAmount, promo.maxDiscount);
+    }
+  } else {
+    // Nominal tidak boleh melebihi subtotal yang diizinkan
+    discAmount = Math.min(promo.value, eligibleSubtotal); 
+  }
+  
+  return Math.floor(discAmount);
 };
 
 // ==========================================
@@ -145,8 +185,6 @@ export default function TabetaiSuperApp() {
 
   const handleRegister = async (name, phone) => {
     if(name.toLowerCase() === ADMIN_CREDENTIALS.username.toLowerCase()) return showToast('Username ini tidak dapat digunakan.', 'error');
-    
-    // VALIDASI: Mencegah penggunaan nomor WA yang sama
     if(members.find(m => m.phone === phone)) {
       return showToast('Nomor WhatsApp sudah terdaftar. Silakan gunakan nomor lain atau login.', 'error');
     }
@@ -254,7 +292,6 @@ function GuestView({ onLogin, onRegister }) {
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home'); 
   
-  // Persistent Cart for Members
   const [cart, setCart] = useState(() => {
     const saved = localStorage.getItem('tbt_cart_member');
     return saved ? JSON.parse(saved) : [];
@@ -323,7 +360,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
         if (promoToUpdate) {
           await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
             stock: Math.max(0, (promoToUpdate.stock || 0) - 1),
-            usedBy: [...(promoToUpdate.usedBy || []), user.phone] // Catat no HP member
+            usedBy: [...(promoToUpdate.usedBy || []), user.phone] 
           });
         }
       }
@@ -363,7 +400,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
 
   const activeMenus = menus.filter(m => m.isActive !== false).sort((a,b) => (a.orderPriority || 99) - (b.orderPriority || 99));
   
-  // Sort user orders purely by timestamp descending for History
   const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
   return (
@@ -465,11 +501,23 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
     if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
     if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
     
+    // Verifikasi Minimal Qty
+    let eligibleQty = 0;
+    cart.forEach(item => {
+      const menuId = item.originalId || item.dbId || item.id;
+      if (!valid.applicableMenus || valid.applicableMenus.includes('all') || valid.applicableMenus.includes(menuId)) {
+        eligibleQty += (item.quantity || item.qty || 1);
+      }
+    });
+
+    if (eligibleQty === 0) return showToast('Promo tidak berlaku untuk menu di keranjang Anda', 'error');
+    if (valid.minQty > 0 && eligibleQty < valid.minQty) return showToast(`Minimal pembelian ${valid.minQty} item menu promo`, 'error');
+
     setAppliedPromo(valid); 
     showToast(`Promo ${valid.code} diterapkan!`); 
   };
 
-  const discountAmount = appliedPromo ? (appliedPromo.type === 'percent' ? Math.floor(subtotal * (appliedPromo.value / 100)) : appliedPromo.value) : 0;
+  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo), [cart, appliedPromo]);
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
   return (
@@ -587,13 +635,11 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
     <div className="fixed inset-0 z-50 flex justify-center items-end bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-t-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full overflow-hidden">
         
-        {/* HERO IMAGE BESAR */}
         <div className="relative w-full h-56 md:h-64 bg-slate-100 shrink-0">
           <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-black/40 backdrop-blur-md text-white rounded-full z-10 hover:bg-black/60 transition-colors"><X size={20} /></button>
           <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
         </div>
         
-        {/* INFO JUDUL & DESKRIPSI */}
         <div className="p-6 border-b border-slate-100 shrink-0 bg-white z-10">
           <h2 className="font-bold text-2xl text-slate-800">{item.name}</h2>
           {item.desc && <p className="text-sm text-slate-500 mt-2 leading-relaxed">{item.desc}</p>}
@@ -642,7 +688,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   
   const [searchQuery, setSearchQuery] = useState("");
   const [promoCode, setPromoCode] = useState("");
-  const [discount, setDiscount] = useState(0);
   const [appliedPromo, setAppliedPromo] = useState(null);
 
   const [checkoutModal, setCheckoutModal] = useState(false);
@@ -654,7 +699,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
   const pendingCount = orders.filter(o => o.status === 'Menunggu Pembayaran' || o.status === 'Pending').length;
   
-  // NOTIFICATION SOUND LOGIC
+  // NOTIFICATION SOUND LOGIC (Loop 5x)
   const prevPendingCount = useRef(pendingCount);
   useEffect(() => {
     if (pendingCount > prevPendingCount.current) {
@@ -698,19 +743,35 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
     if (valid) {
       if (valid.stock !== undefined && valid.stock <= 0) {
-        setDiscount(0); setAppliedPromo(null); return showToast("Kuota promo sudah habis", "error");
+        setAppliedPromo(null); return showToast("Kuota promo sudah habis", "error");
       }
-      const sub = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-      setDiscount(valid.type === 'percent' ? sub * (valid.value / 100) : valid.value);
+      
+      // Verifikasi Minimal Qty
+      let eligibleQty = 0;
+      cart.forEach(item => {
+        const menuId = item.originalId || item.dbId || item.id;
+        if (!valid.applicableMenus || valid.applicableMenus.includes('all') || valid.applicableMenus.includes(menuId)) {
+          eligibleQty += (item.quantity || item.qty || 1);
+        }
+      });
+
+      if (eligibleQty === 0) {
+          setAppliedPromo(null); return showToast("Promo tidak berlaku untuk menu di keranjang", "error");
+      }
+      if (valid.minQty > 0 && eligibleQty < valid.minQty) {
+          setAppliedPromo(null); return showToast(`Minimal pembelian ${valid.minQty} item untuk promo ini`, "error");
+      }
+
       setAppliedPromo(valid);
       showToast(`Promo ${valid.code} diterapkan!`, "success");
     } else {
-      setDiscount(0); setAppliedPromo(null); showToast("Kode promo tidak valid", "error");
+      setAppliedPromo(null); showToast("Kode promo tidak valid", "error");
     }
   };
 
-  const calculateSubtotal = () => cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
-  const calculateTotal = () => Math.max(0, calculateSubtotal() - discount);
+  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo), [cart, appliedPromo]);
+  const calculateSubtotal = () => cart.reduce((sum, item) => sum + (item.price * (item.qty || item.quantity)), 0);
+  const calculateTotal = () => Math.max(0, calculateSubtotal() - discountAmount);
   const calculateChange = () => cashAmount ? parseInt(cashAmount.replace(/\D/g, '')) - calculateTotal() : 0;
 
   const handleCheckout = async () => {
@@ -726,15 +787,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       }
     });
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
-    
-    // Format Waktu Konsisten: HH:MM
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
       id, customer: 'Walk-in / Cashier', items: [...cart], 
       total: calculateTotal(),
       originalTotal: calculateSubtotal(),
-      discount: appliedPromo ? { code: appliedPromo.code, value: discount, dbId: appliedPromo.dbId } : null,
+      discount: appliedPromo ? { code: appliedPromo.code, value: discountAmount, dbId: appliedPromo.dbId } : null,
       status: "Diproses", payment: paymentMethod, 
       isStockDeducted: true,
       time: timeStr,
@@ -743,7 +802,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
-      // --- POTONG STOK PROMO JIKA DIGUNAKAN DI KASIR ---
       if (appliedPromo && appliedPromo.dbId) {
         const promoToUpdate = promos.find(p => p.dbId === appliedPromo.dbId);
         if (promoToUpdate) {
@@ -753,7 +811,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         }
       }
 
-      // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === (item.originalId || item.dbId || item.id));
         if (menuTarget) {
@@ -766,13 +823,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           
           const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
           const updates = { variants: updatedVariants };
-          if (totalQty <= 0) updates.isActive = false; // Auto Hide
+          if (totalQty <= 0) updates.isActive = false; 
           
           await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
 
-      setCart([]); setPromoCode(""); setDiscount(0); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false);
+      setCart([]); setPromoCode(""); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false);
       showToast("Pembayaran Berhasil! Struk siap dicetak.", "success");
     } catch (e) { showToast("Gagal memproses pembayaran", "error"); }
   };
@@ -827,7 +884,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         return l + ' '.repeat(spaces) + r + '\n';
       };
 
-      // --- FILTER WAKTU (DD/MM/YY HH:MM) ---
       let formattedDateTime = '';
       if (order.timestamp) {
         const d = new Date(order.timestamp);
@@ -990,7 +1046,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
               <div className="p-4 bg-white shadow-[0_-10px_20px_rgba(0,0,0,0.05)] z-20">
                 <div className="flex gap-2 mb-4"><input type="text" placeholder="Promo" value={promoCode} onChange={(e)=>setPromoCode(e.target.value.toUpperCase())} className="flex-1 px-3 py-2 bg-slate-50 border rounded-xl text-sm outline-none uppercase" /><button onClick={applyPromoCode} className="px-4 py-2 bg-slate-800 text-white text-sm font-bold rounded-xl">Pakai</button></div>
                 <div className="flex justify-between items-center mb-1"><span className="text-slate-500 text-sm">Subtotal</span><span className="font-semibold text-slate-700">{formatRp(calculateSubtotal())}</span></div>
-                {discount > 0 && <div className="flex justify-between items-center mb-1 text-green-600"><span className="text-sm">Diskon Promo ({appliedPromo?.code})</span><span className="font-semibold">-{formatRp(discount)}</span></div>}
+                {discountAmount > 0 && <div className="flex justify-between items-center mb-1 text-green-600"><span className="text-sm">Diskon Promo ({appliedPromo?.code})</span><span className="font-semibold">-{formatRp(discountAmount)}</span></div>}
                 <div className="flex justify-between items-center mb-3 pt-2 border-t border-slate-100"><span className="text-slate-800 font-bold">Total Akhir</span><span className="text-2xl font-black text-red-600">{formatRp(calculateTotal())}</span></div>
                 <div className="flex gap-2">
                   <button onClick={() => { if (cart.length > 0) setShowSaveBillModal(true); }} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl font-bold"><FolderOpen size={24} /></button>
@@ -1005,7 +1061,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveTab('kasir'); deleteDoc(getDocRef('savedBills', b.dbId)); }} />}
         {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
-        {activeTab === 'promos' && <AdminPromoManager promos={promos} db={db} formatRp={formatRp} showToast={showToast} />}
+        {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
 
         {checkoutModal && (
           <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
@@ -1018,6 +1074,13 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                 </div>
                 {paymentMethod === 'Cash' && (
                   <input type="text" value={cashAmount} onChange={(e) => { const v=e.target.value.replace(/\D/g,''); setCashAmount(v?parseInt(v).toLocaleString('id-ID'):''); }} className="w-full p-4 bg-slate-50 border-2 rounded-2xl font-bold text-xl text-center mb-4" placeholder="Nominal Uang" />
+                )}
+                {paymentMethod === 'QRIS' && (
+                  <div className="mb-6 flex justify-center">
+                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-48 relative">
+                      <img src={qrisImageUrl} alt="QRIS" className="w-full object-contain" />
+                    </div>
+                  </div>
                 )}
                 <button onClick={handleCheckout} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black text-lg">Proses</button>
               </div>
@@ -1059,7 +1122,6 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     try {
       const updates = { status: newStatus };
       
-      // Jika diproses ATAU langsung di-set ke selesai, potong stok!
       if (newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
@@ -1080,14 +1142,13 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
               
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
-              if (totalQty <= 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
+              if (totalQty <= 0) menuUpdates.isActive = false; 
               
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
         }
       } else if (newStatus === 'Dibatalkan') {
-        // Kembalikan Stok jika pesanan dibatalkan
         if (target.isStockDeducted) {
           updates.isStockDeducted = false;
           for (const item of target.items) {
@@ -1099,13 +1160,11 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
               const updatedVariants = menuTarget.variants.map(v => 
                 v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
               );
-              // Jadikan menu Aktif kembali karena stok bertambah
               await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
             }
           }
         }
         
-        // --- KEMBALIKAN STOK PROMO & CABUT STATUS PENGGUNAAN ---
         if (target.discount && target.discount.dbId) {
           const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
           if (promoToUpdate) {
@@ -1117,7 +1176,6 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
           }
         }
 
-        // Tarik kembali poin jika pelanggan membatalkan pesanan
         if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = false;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
@@ -1415,14 +1473,40 @@ function AdminMemberManager({ members, db, showToast }) {
   );
 }
 
-function AdminPromoManager({ promos, db, formatRp, showToast }) {
+function AdminPromoManager({ promos, menus, db, formatRp, showToast }) {
   const [form, setForm] = useState(null);
   
+  const handleMenuToggle = (menuId) => {
+    let current = form.applicableMenus || ['all'];
+    if (current.includes('all')) current = [];
+
+    if (current.includes(menuId)) {
+      current = current.filter(id => id !== menuId);
+      if (current.length === 0) current = ['all'];
+    } else {
+      current = [...current, menuId];
+    }
+    setForm({ ...form, applicableMenus: current });
+  };
+
+  const isAllMenus = !form?.applicableMenus || form?.applicableMenus.includes('all') || form?.applicableMenus.length === 0;
+
+  const sortedMenus = useMemo(() => {
+    return [...menus].sort((a, b) => a.name.localeCompare(b.name));
+  }, [menus]);
+
   const handleSave = async (e) => { 
     e.preventDefault(); 
     try { 
-      const data = { ...form, value: Number(form.value), stock: Number(form.stock) };
-      if (!data.usedBy) data.usedBy = []; // Ensure usedBy array is prepared
+      const data = { 
+        ...form, 
+        value: Number(form.value), 
+        stock: Number(form.stock),
+        maxDiscount: Number(form.maxDiscount) || 0,
+        minQty: Number(form.minQty) || 0
+      };
+      if (!data.usedBy) data.usedBy = []; 
+      if (!data.applicableMenus) data.applicableMenus = ['all'];
       
       if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); 
       else await addDoc(getColRef('promos'), data); 
@@ -1435,32 +1519,70 @@ function AdminPromoManager({ promos, db, formatRp, showToast }) {
   };
 
   if(form) return (
-    <div className="flex-1 p-6 bg-white">
+    <div className="flex-1 p-6 bg-white overflow-y-auto">
       <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
       <form onSubmit={handleSave} className="max-w-md space-y-4">
         <input required placeholder="KODE (Cth: PROMO50)" value={form.code} onChange={e=>setForm({...form, code:e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl uppercase"/>
+        
         <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl">
           <option value="percent">Persentase (%)</option>
           <option value="nominal">Nominal (Rp)</option>
         </select>
-        <input required type="number" placeholder="Nilai Diskon" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
-        <input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
         
-        <div className="flex gap-2 items-center"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label>Aktif</label></div>
-        <button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl">Simpan</button>
+        <input required type="number" placeholder="Nilai Diskon" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        
+        {form.type === 'percent' && (
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Maksimal Potongan (Rp)</label>
+            <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.maxDiscount || ''} onChange={e=>setForm({...form, maxDiscount:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+          </div>
+        )}
+
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Minimal Pembelian (Qty Item Berlaku)</label>
+          <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.minQty || ''} onChange={e=>setForm({...form, minQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        </div>
+
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Stok / Kuota Penggunaan Promo</label>
+          <input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        </div>
+        
+        <div className="border-t border-slate-200 pt-4 mt-2">
+          <label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Menu:</label>
+          <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50">
+            <label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200">
+              <input type="checkbox" checked={isAllMenus} onChange={() => setForm({...form, applicableMenus: ['all']})} className="w-5 h-5 accent-red-600"/>
+              <span className="font-bold text-slate-800 text-sm">Semua Menu</span>
+            </label>
+            {sortedMenus.map(m => (
+              <label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1">
+                <input type="checkbox" checked={!isAllMenus && form.applicableMenus?.includes(m.dbId)} onChange={() => handleMenuToggle(m.dbId)} className="w-5 h-5 accent-red-600"/>
+                <span className="text-sm font-medium text-slate-700">{m.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex gap-2 items-center pt-2"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-slate-700">Promo Aktif</label></div>
+        <button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl mt-4">Simpan</button>
       </form>
     </div>
   );
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: []})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: [], applicableMenus: ['all'], minQty: 0})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {promos.map(p => (
           <div key={p.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
             <div>
               <h3 className="font-black text-xl">{p.code}</h3>
-              <p className="text-slate-500 font-medium">
-                {p.type==='percent'?`${p.value}%`:formatRp(p.value)} • Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} {p.isActive?'(Aktif)':'(Mati)'}
+              <p className="text-slate-500 font-medium text-sm mt-0.5">
+                {p.type==='percent'?`${p.value}%`:formatRp(p.value)} 
+                {p.maxDiscount > 0 ? ` (Maks ${formatRp(p.maxDiscount)})` : ''} 
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} • Min Qty: {p.minQty || 0} {p.isActive?'(Aktif)':'(Mati)'}
               </p>
             </div>
             <div className="flex gap-2"><button onClick={()=>setForm(p)} className="p-2 bg-blue-50 text-blue-600 rounded-lg"><Edit2 size={18}/></button><button onClick={()=>deleteDoc(getDocRef('promos', p.dbId))} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={18}/></button></div>
