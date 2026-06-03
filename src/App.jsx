@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   ShoppingCart, MessageCircle, ChevronLeft, Plus, Minus, X, Download, Clock, Store, 
-  User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer
+  User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer, Menu as MenuIcon
 } from 'lucide-react';
 
 // --- FIREBASE IMPORTS ---
@@ -51,6 +51,59 @@ const logoImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(angka || 0);
 
+// Helper Mengecek Waktu Menu Aktif
+const isMenuAvailableByTime = (menu) => {
+  if (!menu.isTimeRestricted || !menu.startTime || !menu.endTime) return true;
+  const now = new Date();
+  const currentMins = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = menu.startTime.split(':').map(Number);
+  const [eh, em] = menu.endTime.split(':').map(Number);
+  const startMins = sh * 60 + sm;
+  const endMins = eh * 60 + em;
+  return currentMins >= startMins && currentMins <= endMins;
+};
+
+// Helper Menghitung Diskon & Syarat Promo
+const calculatePromoDiscount = (cart, promo) => {
+  if (!promo) return { discount: 0, error: null };
+  let eligibleSubtotal = 0;
+  let eligibleQty = 0;
+  let nonPromoQty = 0;
+
+  cart.forEach(item => {
+    const menuId = item.originalId || item.dbId || item.id;
+    const qty = item.qty || item.quantity || 1;
+    const isApplicable = !promo.applicableMenus || promo.applicableMenus.includes('all') || promo.applicableMenus.includes(menuId);
+
+    if (isApplicable) {
+      eligibleSubtotal += (item.price * qty);
+      eligibleQty += qty;
+    } else {
+      nonPromoQty += qty;
+    }
+  });
+
+  if (eligibleQty === 0) return { discount: 0, error: 'Promo tidak berlaku untuk menu di keranjang Anda' };
+  if (promo.minQty > 0 && eligibleQty < promo.minQty) return { discount: 0, error: `Minimal pembelian ${promo.minQty} item menu promo` };
+
+  // Syarat Pembelian Silang (Beli produk lain di luar promo)
+  if (promo.requireNonPromoItem && nonPromoQty < (promo.minNonPromoQty || 1)) {
+    return { discount: 0, error: `Syarat: Beli minimal ${promo.minNonPromoQty || 1} menu lain di luar menu promo` };
+  }
+
+  let discAmount = 0;
+  if (promo.type === 'percent') {
+    discAmount = (eligibleSubtotal * promo.value) / 100;
+    if (promo.maxDiscount && promo.maxDiscount > 0) {
+      discAmount = Math.min(discAmount, promo.maxDiscount);
+    }
+  } else {
+    discAmount = Math.min(promo.value, eligibleSubtotal); 
+  }
+  
+  return { discount: Math.floor(discAmount), error: null };
+};
+
 const generateInvoiceWAUrl = (order, userPhone) => {
   const itemsText = order.items.map(i => `- ${i.quantity || i.qty}x ${i.name} (${i.variant || i.variantId})${i.note ? ` [Note: ${i.note}]` : ''}: ${formatRp(i.price * (i.quantity || i.qty))}`).join('%0A');
   let discountText = '';
@@ -62,46 +115,6 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   if (waNumber.startsWith('0')) waNumber = '62' + waNumber.substring(1);
   if (waNumber.startsWith('+')) waNumber = waNumber.substring(1);
   return `https://wa.me/${waNumber}?text=${text}`;
-};
-
-// Fungsi Pintar Hitung Diskon Berdasarkan Menu, Batas Maksimal, dan Minimal QTY
-const calculatePromoDiscount = (cart, promo) => {
-  if (!promo) return 0;
-  let eligibleSubtotal = 0;
-  let eligibleQty = 0;
-  
-  cart.forEach(item => {
-    const menuId = item.originalId || item.dbId || item.id;
-    const qty = item.qty || item.quantity || 1;
-    
-    // Cek apakah item ini masuk ke dalam daftar promo
-    const isApplicable = !promo.applicableMenus || promo.applicableMenus.includes('all') || promo.applicableMenus.includes(menuId);
-    if (isApplicable) {
-      eligibleSubtotal += (item.price * qty);
-      eligibleQty += qty;
-    }
-  });
-
-  // Validasi Minimal Qty Pembelian
-  if (promo.minQty && promo.minQty > 0 && eligibleQty < promo.minQty) {
-    return 0; // Jika tidak memenuhi batas kuantitas minimum
-  }
-
-  if (eligibleSubtotal === 0) return 0; // Jika tidak ada makanan yang sesuai promo
-
-  let discAmount = 0;
-  if (promo.type === 'percent') {
-    discAmount = (eligibleSubtotal * promo.value) / 100;
-    // Terapkan batasan maksimal diskon jika disetel
-    if (promo.maxDiscount && promo.maxDiscount > 0) {
-      discAmount = Math.min(discAmount, promo.maxDiscount);
-    }
-  } else {
-    // Nominal tidak boleh melebihi subtotal yang diizinkan
-    discAmount = Math.min(promo.value, eligibleSubtotal); 
-  }
-  
-  return Math.floor(discAmount);
 };
 
 // ==========================================
@@ -118,21 +131,19 @@ export default function TabetaiSuperApp() {
   const [promos, setPromos] = useState([]);
   const [savedBills, setSavedBills] = useState([]);
   
-  // Navigation & User State (PERSISTENT LOGIC)
+  // Navigation & User State
   const [role, setRole] = useState(() => localStorage.getItem('tbt_role') || 'guest'); 
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = localStorage.getItem('tbt_user');
     return saved ? JSON.parse(saved) : null;
   });
 
-  // Save session state locally
   useEffect(() => {
     localStorage.setItem('tbt_role', role);
     if (currentUser) localStorage.setItem('tbt_user', JSON.stringify(currentUser));
     else localStorage.removeItem('tbt_user');
   }, [role, currentUser]);
   
-  // Toast Notification
   const [toast, setToast] = useState(null);
   const showToast = (message, type = 'success') => {
     setToast({ message, type });
@@ -145,7 +156,6 @@ export default function TabetaiSuperApp() {
         await signInAnonymously(auth);
         setAuthError(null);
       } catch (error) {
-        console.error("Auth Error:", error);
         setAuthError(error.message);
       } finally {
         setIsAuthReady(true);
@@ -185,9 +195,7 @@ export default function TabetaiSuperApp() {
 
   const handleRegister = async (name, phone) => {
     if(name.toLowerCase() === ADMIN_CREDENTIALS.username.toLowerCase()) return showToast('Username ini tidak dapat digunakan.', 'error');
-    if(members.find(m => m.phone === phone)) {
-      return showToast('Nomor WhatsApp sudah terdaftar. Silakan gunakan nomor lain atau login.', 'error');
-    }
+    if(members.find(m => m.phone === phone)) return showToast('Nomor WhatsApp sudah terdaftar. Silakan login.', 'error');
     
     try {
       const newMemberData = { name, phone, points: 0, joinedAt: Date.now() };
@@ -228,9 +236,8 @@ export default function TabetaiSuperApp() {
   );
 }
 
-
 // ==========================================
-// 1. GUEST VIEW (Login & Register)
+// 1. GUEST VIEW
 // ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
@@ -343,7 +350,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       earnedPoints: earnedPoints,
       isPointsAwarded: false,
       isStockDeducted: false,
-      status: 'Menunggu Pembayaran',
+      status: 'Pembayaran Diterima', // Diganti dari Pending
       payment: 'QRIS / Transfer',
       time: timeStr,
       date: dateObj.toLocaleString('id-ID'),
@@ -354,7 +361,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     try {
       await setDoc(getDocRef('transactions', orderId), newOrderData);
 
-      // --- POTONG STOK PROMO & CATAT PENGGUNAAN ---
       if (discountObj && discountObj.dbId) {
         const promoToUpdate = promos.find(p => p.dbId === discountObj.dbId);
         if (promoToUpdate) {
@@ -378,7 +384,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       try {
         await updateDoc(getDocRef('transactions', orderId), { status: 'Dibatalkan' });
         
-        // --- KEMBALIKAN STOK PROMO JIKA DIBATALKAN ---
         const target = orders.find(o => o.dbId === orderId);
         if (target && target.discount && target.discount.dbId) {
           const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
@@ -398,8 +403,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     }
   };
 
-  const activeMenus = menus.filter(m => m.isActive !== false).sort((a,b) => (a.orderPriority || 99) - (b.orderPriority || 99));
-  
+  const activeMenus = menus.filter(m => m.isActive !== false && isMenuAvailableByTime(m)).sort((a,b) => (a.orderPriority || 99) - (b.orderPriority || 99));
   const myOrders = orders.filter(o => o.customer === user.name && o.customerPhone === user.phone).sort((a,b) => (b.timestamp || 0) - (a.timestamp || 0));
 
   return (
@@ -501,23 +505,16 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
     if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
     if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
     
-    // Verifikasi Minimal Qty
-    let eligibleQty = 0;
-    cart.forEach(item => {
-      const menuId = item.originalId || item.dbId || item.id;
-      if (!valid.applicableMenus || valid.applicableMenus.includes('all') || valid.applicableMenus.includes(menuId)) {
-        eligibleQty += (item.quantity || item.qty || 1);
-      }
-    });
-
-    if (eligibleQty === 0) return showToast('Promo tidak berlaku untuk menu di keranjang Anda', 'error');
-    if (valid.minQty > 0 && eligibleQty < valid.minQty) return showToast(`Minimal pembelian ${valid.minQty} item menu promo`, 'error');
+    const calculation = calculatePromoDiscount(cart, valid);
+    if (calculation.error) {
+      return showToast(calculation.error, 'error');
+    }
 
     setAppliedPromo(valid); 
     showToast(`Promo ${valid.code} diterapkan!`); 
   };
 
-  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo), [cart, appliedPromo]);
+  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo).discount, [cart, appliedPromo]);
   const finalTotal = Math.max(0, subtotal - discountAmount);
 
   return (
@@ -614,7 +611,7 @@ function MemberStatus({ orders, onBack, userPhone, formatRp, onCancelOrder }) {
             </div>
             <div className="flex justify-between items-center mb-4"><span className="text-sm text-slate-500">Total</span><span className="font-bold text-slate-800">{formatRp(order.total)}</span></div>
             <button onClick={() => window.open(generateInvoiceWAUrl(order, userPhone), '_blank')} className="w-full flex justify-center gap-2 text-blue-600 font-semibold border border-blue-100 bg-blue-50 py-2 rounded-lg text-sm"><Download size={14} /> Invoice WA</button>
-            {(order.status === 'Menunggu Pembayaran' || order.status === 'Pending') && (
+            {(order.status === 'Menunggu Pembayaran' || order.status === 'Pembayaran Diterima') && (
                <button onClick={() => onCancelOrder(order.dbId)} className="w-full mt-2 flex justify-center gap-2 text-red-600 font-semibold border border-red-100 bg-red-50 py-2 rounded-lg text-sm transition-colors hover:bg-red-100"><X size={14} /> Batalkan Pesanan</button>
             )}
           </div>
@@ -678,8 +675,8 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 // ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
-  // Persistent Cart for Admin
   const [cart, setCart] = useState(() => {
     const saved = localStorage.getItem('tbt_cart_admin');
     return saved ? JSON.parse(saved) : [];
@@ -695,11 +692,18 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const [cashAmount, setCashAmount] = useState('');
   const [variantModal, setVariantModal] = useState(false);
   const [showSaveBillModal, setShowSaveBillModal] = useState(false);
-  const [billName, setBillName] = useState("");
-
-  const pendingCount = orders.filter(o => o.status === 'Menunggu Pembayaran' || o.status === 'Pending').length;
   
-  // NOTIFICATION SOUND LOGIC (Loop 5x)
+  const [billCustomerType, setBillCustomerType] = useState('existing'); // existing | new
+  const [memberSearch, setMemberSearch] = useState('');
+  const [showMemberDropdown, setShowMemberDropdown] = useState(false);
+  const [selectedMemberId, setSelectedMemberId] = useState('');
+  const [newMemberName, setNewMemberName] = useState('');
+  const [newMemberPhone, setNewMemberPhone] = useState('');
+  
+  const [activeBill, setActiveBill] = useState(null);
+
+  const pendingCount = orders.filter(o => o.status === 'Menunggu Pembayaran' || o.status === 'Pembayaran Diterima').length;
+  
   const prevPendingCount = useRef(pendingCount);
   useEffect(() => {
     if (pendingCount > prevPendingCount.current) {
@@ -707,15 +711,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         const audio = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
         let playCount = 0;
         const maxPlays = 5;
-
-        audio.onended = () => {
-          playCount++;
-          if (playCount < maxPlays) {
-            audio.play().catch(e => console.log('Audio autoplay blocked by browser', e));
-          }
-        };
-
-        audio.play().catch(e => console.log('Audio autoplay blocked by browser', e));
+        audio.onended = () => { playCount++; if (playCount < maxPlays) audio.play().catch(e => {}); };
+        audio.play().catch(e => {});
       } catch (e) {}
     }
     prevPendingCount.current = pendingCount;
@@ -723,7 +720,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
   const filteredMenu = menus.filter(item => {
     const matchSearch = item.name.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchSearch && item.isActive !== false;
+    return matchSearch && item.isActive !== false && isMenuAvailableByTime(item);
   }).sort((a, b) => (a.orderPriority || 99) - (b.orderPriority || 99));
 
   const addToCartFinal = (item, variantName, quantity = 1, note = '') => {
@@ -745,23 +742,10 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       if (valid.stock !== undefined && valid.stock <= 0) {
         setAppliedPromo(null); return showToast("Kuota promo sudah habis", "error");
       }
-      
-      // Verifikasi Minimal Qty
-      let eligibleQty = 0;
-      cart.forEach(item => {
-        const menuId = item.originalId || item.dbId || item.id;
-        if (!valid.applicableMenus || valid.applicableMenus.includes('all') || valid.applicableMenus.includes(menuId)) {
-          eligibleQty += (item.quantity || item.qty || 1);
-        }
-      });
-
-      if (eligibleQty === 0) {
-          setAppliedPromo(null); return showToast("Promo tidak berlaku untuk menu di keranjang", "error");
+      const calculation = calculatePromoDiscount(cart, valid);
+      if (calculation.error) {
+        setAppliedPromo(null); return showToast(calculation.error, "error");
       }
-      if (valid.minQty > 0 && eligibleQty < valid.minQty) {
-          setAppliedPromo(null); return showToast(`Minimal pembelian ${valid.minQty} item untuk promo ini`, "error");
-      }
-
       setAppliedPromo(valid);
       showToast(`Promo ${valid.code} diterapkan!`, "success");
     } else {
@@ -769,8 +753,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     }
   };
 
-  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo), [cart, appliedPromo]);
-  const calculateSubtotal = () => cart.reduce((sum, item) => sum + (item.price * (item.qty || item.quantity)), 0);
+  const discountAmount = useMemo(() => calculatePromoDiscount(cart, appliedPromo).discount, [cart, appliedPromo]);
+  const calculateSubtotal = () => cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
   const calculateTotal = () => Math.max(0, calculateSubtotal() - discountAmount);
   const calculateChange = () => cashAmount ? parseInt(cashAmount.replace(/\D/g, '')) - calculateTotal() : 0;
 
@@ -790,7 +774,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
-      id, customer: 'Walk-in / Cashier', items: [...cart], 
+      id, customer: activeBill ? activeBill.name : 'Walk-in / Cashier', items: [...cart], 
       total: calculateTotal(),
       originalTotal: calculateSubtotal(),
       discount: appliedPromo ? { code: appliedPromo.code, value: discountAmount, dbId: appliedPromo.dbId } : null,
@@ -802,12 +786,12 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
+      if (activeBill) { await deleteDoc(getDocRef('savedBills', activeBill.id)); }
+
       if (appliedPromo && appliedPromo.dbId) {
         const promoToUpdate = promos.find(p => p.dbId === appliedPromo.dbId);
         if (promoToUpdate) {
-          await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
-            stock: Math.max(0, (promoToUpdate.stock || 0) - 1)
-          });
+          await updateDoc(getDocRef('promos', promoToUpdate.dbId), { stock: Math.max(0, (promoToUpdate.stock || 0) - 1) });
         }
       }
 
@@ -816,196 +800,150 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         if (menuTarget) {
           const deductQty = Number(item.qty || item.quantity || 1);
           const variantName = item.variantId || item.variant || 'default';
-          
-          const updatedVariants = menuTarget.variants.map(v => 
-            v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
-          );
-          
+          const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v);
           const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
           const updates = { variants: updatedVariants };
           if (totalQty <= 0) updates.isActive = false; 
-          
           await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
 
-      setCart([]); setPromoCode(""); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false);
+      setCart([]); setPromoCode(""); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false); setActiveBill(null);
       showToast("Pembayaran Berhasil! Struk siap dicetak.", "success");
     } catch (e) { showToast("Gagal memproses pembayaran", "error"); }
   };
 
   const handleSaveBill = async () => {
-    if (cart.length === 0 || !billName) return showToast("Keranjang kosong / Nama belum diisi", "error");
+    if (cart.length === 0) return showToast("Keranjang kosong", "error");
+    
+    let customerName = "Walk-in";
+    let customerPhone = "";
+    
+    if (billCustomerType === 'existing' && selectedMemberId) {
+       const mem = members.find(m => m.dbId === selectedMemberId);
+       if (mem) { customerName = mem.name; customerPhone = mem.phone; }
+    } else if (billCustomerType === 'new' && newMemberName && newMemberPhone) {
+       customerName = newMemberName; customerPhone = newMemberPhone;
+       try {
+         await addDoc(getColRef('members'), { name: newMemberName, phone: newMemberPhone, points: 0, joinedAt: Date.now() });
+       } catch (e) { return showToast("Gagal register member baru", "error"); }
+    } else if (billCustomerType === 'new' && newMemberName) {
+       customerName = newMemberName; 
+    } else {
+       return showToast("Pilih/Masukkan nama pelanggan", "error");
+    }
+
     try {
       const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
-      await setDoc(getDocRef('savedBills', `BILL-${Date.now()}`), { name: billName, items: [...cart], timeString: timeStr, timestamp: Date.now() });
-      setCart([]); setShowSaveBillModal(false); setBillName(""); showToast(`Bill '${billName}' disimpan`, "success");
+      await setDoc(getDocRef('savedBills', `BILL-${Date.now()}`), { name: customerName, phone: customerPhone, items: [...cart], timeString: timeStr, timestamp: Date.now() });
+      setCart([]); setShowSaveBillModal(false); setSelectedMemberId(''); setNewMemberName(''); setNewMemberPhone(''); setMemberSearch(''); setActiveBill(null);
+      showToast(`Bill untuk '${customerName}' disimpan`, "success");
+    } catch (e) { showToast("Gagal menyimpan bill", "error"); }
+  };
+
+  const handleAutoSaveBill = async () => {
+    try {
+      const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+      await setDoc(getDocRef('savedBills', activeBill.id), { name: activeBill.name, phone: activeBill.phone || "", items: [...cart], timeString: timeStr, timestamp: Date.now() });
+      setCart([]); setActiveBill(null);
+      showToast(`Bill untuk '${activeBill.name}' auto-save berhasil`, "success");
     } catch (e) { showToast("Gagal menyimpan bill", "error"); }
   };
 
   const handlePrintReceipt = async (order) => {
-    if (!navigator.bluetooth) {
-      return showToast("Browser/Perangkat ini tidak mendukung Bluetooth Web API", "error");
-    }
+    if (!navigator.bluetooth) return showToast("Browser tidak mendukung Bluetooth API", "error");
     try {
       showToast("Mencari Printer Bluetooth...", "info");
-      const device = await navigator.bluetooth.requestDevice({
-        acceptAllDevices: true,
-        optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] 
-      });
+      const device = await navigator.bluetooth.requestDevice({ acceptAllDevices: true, optionalServices: ['000018f0-0000-1000-8000-00805f9b34fb', 'e7810a71-73ae-499d-8c15-faa9aef0c3f2', '0000180a-0000-1000-8000-00805f9b34fb'] });
       const server = await device.gatt.connect();
       const services = await server.getPrimaryServices();
       let printChar = null;
       for (const service of services) {
         const chars = await service.getCharacteristics();
-        for (const char of chars) {
-          if (char.properties.write || char.properties.writeWithoutResponse) { printChar = char; break; }
-        }
+        for (const char of chars) { if (char.properties.write || char.properties.writeWithoutResponse) { printChar = char; break; } }
         if (printChar) break;
       }
+      if (!printChar) throw new Error("Tidak menemukan jalur tulis printer.");
 
-      if (!printChar) throw new Error("Tidak menemukan jalur tulis di printer ini.");
-
-      const ESC = '\x1B';
-      const init = ESC + '@';
-      const center = ESC + 'a' + '\x01';
-      const left = ESC + 'a' + '\x00';
-      const boldOn = ESC + 'E' + '\x01';
-      const boldOff = ESC + 'E' + '\x00';
-      
-      const lineWidth = 28;
-      const lineStr = '-'.repeat(lineWidth) + '\n';
-      const dotLineStr = '.'.repeat(lineWidth) + '\n';
-      
-      const alignRight = (leftText, rightText) => {
-        let l = String(leftText); let r = String(rightText);
-        let spaces = lineWidth - l.length - r.length;
-        if (spaces < 1) return l + ' ' + r + '\n';
-        return l + ' '.repeat(spaces) + r + '\n';
-      };
+      const ESC = '\x1B', init = ESC + '@', center = ESC + 'a' + '\x01', left = ESC + 'a' + '\x00', boldOn = ESC + 'E' + '\x01', boldOff = ESC + 'E' + '\x00';
+      const lineWidth = 28, lineStr = '-'.repeat(lineWidth) + '\n', dotLineStr = '.'.repeat(lineWidth) + '\n';
+      const alignRight = (leftText, rightText) => { let l = String(leftText), r = String(rightText), spaces = lineWidth - l.length - r.length; return spaces < 1 ? l + ' ' + r + '\n' : l + ' '.repeat(spaces) + r + '\n'; };
 
       let formattedDateTime = '';
       if (order.timestamp) {
         const d = new Date(order.timestamp);
-        const DD = String(d.getDate()).padStart(2, '0');
-        const MM = String(d.getMonth() + 1).padStart(2, '0');
-        const YY = String(d.getFullYear()).slice(-2);
-        const HH = String(d.getHours()).padStart(2, '0');
-        const MIN = String(d.getMinutes()).padStart(2, '0');
-        formattedDateTime = `${DD}/${MM}/${YY} ${HH}:${MIN}`;
+        formattedDateTime = `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getFullYear()).slice(-2)} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
       } else {
-        let timeStr = order.time ? order.time.replace('.', ':').substring(0, 5) : '';
-        let dateStr = order.date ? order.date.split(',')[0].trim() : '';
-        const parts = dateStr.split('/');
-        if (parts.length === 3) dateStr = `${parts[0].padStart(2,'0')}/${parts[1].padStart(2,'0')}/${parts[2].slice(-2)}`;
-        formattedDateTime = `${dateStr} ${timeStr}`.trim();
+        formattedDateTime = `${order.date ? order.date.split(',')[0].trim() : ''} ${order.time ? order.time.replace('.', ':').substring(0, 5) : ''}`.trim();
       }
       
-      let receiptText = init + center + boldOn + 'tabetai.id\n' + boldOff;
-      receiptText += 'oishii onigiri\n\n';
-      receiptText += left + `Order: ${order.customer}\n`;
-      receiptText += `No. Resi: ${order.id}\n`;
-      receiptText += `Employee: Admin\n`;
-      receiptText += `POS: Master\n`;
-      receiptText += lineStr;
+      let receiptText = init + center + boldOn + 'tabetai.id\n' + boldOff + 'oishii onigiri\n\n' + left + `Order: ${order.customer}\nNo. Resi: ${order.id}\nWaktu: ${formattedDateTime}\nEmployee: Admin\nPOS: Master\n` + lineStr;
       
       order.items.forEach(item => {
         const qty = item.quantity || item.qty;
         let displayName = item.name.length > 15 ? item.name.substring(0, 14) + '.' : item.name;
-        
-        if (item.note) {
-          receiptText += `${displayName}\n`;
-          receiptText += `  Catatan: ${item.note}\n`;
-          receiptText += alignRight(`${qty} x ${formatRp(item.price)}`, formatRp(item.price * qty));
-        } else {
-          receiptText += alignRight(displayName, formatRp(item.price * qty));
-          receiptText += `${qty} x ${formatRp(item.price)}\n`;
-        }
-        
+        if (item.note) { receiptText += `${displayName}\n  Catatan: ${item.note}\n` + alignRight(`${qty} x ${formatRp(item.price)}`, formatRp(item.price * qty)); } 
+        else { receiptText += alignRight(displayName, formatRp(item.price * qty)) + `${qty} x ${formatRp(item.price)}\n`; }
         const variant = item.variant || item.variantId;
-        if (variant && variant !== 'default') {
-          variant.split(',').forEach(v => {
-            receiptText += `  + ${v.trim()}\n`;
-          });
-        }
+        if (variant && variant !== 'default') variant.split(',').forEach(v => receiptText += `  + ${v.trim()}\n`);
         receiptText += ' \n'; 
       });
-      
       receiptText += lineStr;
-      
       if (order.discount && order.discount.value > 0) {
-        receiptText += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value));
-        receiptText += alignRight(`Diskon`, '-' + formatRp(order.discount.value));
-        receiptText += lineStr;
+        receiptText += alignRight('Subtotal', formatRp((order.originalTotal || order.total) + order.discount.value)) + alignRight(`Diskon`, '-' + formatRp(order.discount.value)) + lineStr;
       }
+      receiptText += boldOn + alignRight('Total', formatRp(order.total)).replace('\n', '') + boldOff + '\n\n' + alignRight(order.payment || 'QRIS', formatRp(order.total)) + dotLineStr;
+      receiptText += center + '**Arigatou**\nPlease consume it\nimmediately on the day\nit is ordered or store it\nin the refrigerator for\na maximum of 3 days\n\nWA : 0812-8555-7779\n(text only)\nIG : @tabetaii.id\n\n';
+      receiptText += left + alignRight(formattedDateTime, '#' + (order.id.split('-')[1] || order.id)) + '\n\n\n\n';
 
-      let totalLine = alignRight('Total', formatRp(order.total));
-      receiptText += boldOn + totalLine.replace('\n', '') + boldOff + '\n\n';
-      
-      receiptText += alignRight(order.payment || 'QRIS', formatRp(order.total));
-      receiptText += dotLineStr;
-      
-      receiptText += center + '**Arigatou**\n';
-      receiptText += 'Please consume it\n';
-      receiptText += 'immediately on the day\n';
-      receiptText += 'it is ordered or store it\n';
-      receiptText += 'in the refrigerator for\n';
-      receiptText += 'a maximum of 3 days\n\n';
-      
-      receiptText += 'WA : 0812-8555-7779\n';
-      receiptText += '(text only)\n';
-      receiptText += 'IG : @tabetaii.id\n\n';
-
-      const shortId = '#' + (order.id.split('-')[1] || order.id);
-      receiptText += left + alignRight(formattedDateTime, shortId);
-      receiptText += '\n\n\n\n';
-
-      const encoder = new TextEncoder();
-      const printData = encoder.encode(receiptText);
-      const chunkSize = 256;
-      for (let i = 0; i < printData.length; i += chunkSize) {
-        await printChar.writeValue(printData.slice(i, i + chunkSize));
-      }
+      const printData = new TextEncoder().encode(receiptText);
+      for (let i = 0; i < printData.length; i += 256) await printChar.writeValue(printData.slice(i, i + 256));
       showToast("Struk berhasil dicetak!", "success");
-    } catch (error) {
-      console.error(error);
-      if (error.name === 'SecurityError' || error.message.includes('permissions policy')) {
-        showToast("Bluetooth diblokir di layar Preview. Buka aplikasi di tab baru atau deploy ke Vercel.", "error");
-      } else {
-        showToast(error.message.includes('cancelled') ? 'Pencetakan dibatalkan' : 'Gagal mencetak: ' + error.message, "error");
-      }
-    }
+    } catch (error) { showToast(error.message.includes('cancelled') ? 'Dibatalkan' : 'Gagal mencetak: ' + error.message, "error"); }
   };
 
   return (
-    <div className="flex h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden w-full">
-      <div className="w-24 md:w-64 bg-white shadow-xl flex flex-col justify-between z-10">
+    <div className="flex h-screen bg-slate-100 font-sans text-slate-800 overflow-hidden w-full relative">
+      {/* SIDEBAR */}
+      <div className={`transition-all duration-300 overflow-hidden bg-white shadow-xl flex flex-col justify-between z-20 shrink-0 ${isSidebarOpen ? 'w-64' : 'w-20'}`}>
         <div>
-          <div className="p-4 md:p-6 flex items-center justify-center md:justify-start gap-3 border-b border-slate-100">
-            <img src={logoImageUrl} alt="Tabetai Logo" className="w-10 h-10 bg-red-600 rounded-xl p-1" />
-            <h1 className="text-xl font-black text-slate-800 hidden md:block">Tabetai<span className="text-red-600">POS</span></h1>
+          <div className={`p-4 md:p-6 flex items-center border-b border-slate-100 ${isSidebarOpen ? 'justify-between' : 'justify-center'}`}>
+            <div className="flex items-center gap-3 overflow-hidden">
+              <img src={logoImageUrl} alt="Logo" className="w-10 h-10 bg-red-600 rounded-xl p-1 shrink-0" />
+              <h1 className={`text-xl font-black text-slate-800 transition-opacity ${isSidebarOpen ? 'opacity-100' : 'opacity-0 hidden'}`}>Tabetai<span className="text-red-600">POS</span></h1>
+            </div>
+            {isSidebarOpen && <button onClick={()=>setIsSidebarOpen(false)} className="md:hidden p-1 bg-slate-100 rounded text-slate-500"><X size={20}/></button>}
           </div>
-          <nav className="p-4 space-y-2">
+          <nav className="p-3 space-y-2">
             {[{id:'kasir', icon: ChefHat, label: 'Kasir'}, {id:'pesanan', icon: Clock, label: 'Pesanan'}, {id:'openbill', icon: FolderOpen, label: 'Open Bill'}, {id:'menu', icon: UtensilsCrossed, label: 'Menu Admin'}, {id:'members', icon: Users, label: 'Member'}, {id:'promos', icon: Tag, label: 'Promo'}].map(tab => (
-              <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`relative w-full flex items-center gap-3 px-3 py-3 md:px-4 rounded-xl transition-colors ${activeTab === tab.id ? 'bg-red-600 text-white shadow-md' : 'text-slate-500 hover:bg-red-50'}`}>
-                <tab.icon size={22} className="mx-auto md:mx-0"/>
-                <span className="font-bold hidden md:block">{tab.label}</span>
-                {tab.id === 'openbill' && savedBills.length > 0 && <span className="absolute top-2 right-2 md:static md:ml-auto bg-yellow-400 text-black text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full font-bold">{savedBills.length}</span>}
-                {tab.id === 'pesanan' && pendingCount > 0 && <span className="absolute top-2 right-2 md:static md:ml-auto bg-blue-500 text-white text-[10px] md:text-xs px-1.5 md:px-2 py-0.5 rounded-full font-bold shadow-[0_0_10px_rgba(59,130,246,0.5)] animate-pulse">{pendingCount} Baru</span>}
+              <button key={tab.id} onClick={() => {setActiveTab(tab.id); if(window.innerWidth<768) setIsSidebarOpen(false);}} className={`relative w-full flex items-center px-3 py-3 rounded-xl transition-colors ${activeTab === tab.id ? 'bg-red-600 text-white shadow-md' : 'text-slate-500 hover:bg-red-50'} ${isSidebarOpen ? 'gap-3' : 'justify-center'}`}>
+                <tab.icon size={22} className="shrink-0" />
+                <span className={`font-bold transition-opacity whitespace-nowrap ${isSidebarOpen ? 'opacity-100 block' : 'opacity-0 hidden'}`}>{tab.label}</span>
+                {tab.id === 'openbill' && savedBills.length > 0 && <span className={`absolute bg-yellow-400 text-black text-xs py-0.5 rounded-full font-bold ${isSidebarOpen ? 'right-4 px-2' : 'top-1 right-1 px-1.5 text-[10px]'}`}>{savedBills.length}</span>}
+                {tab.id === 'pesanan' && pendingCount > 0 && <span className={`absolute bg-blue-500 text-white font-bold shadow-[0_0_10px_rgba(59,130,246,0.5)] animate-pulse ${isSidebarOpen ? 'right-4 text-[10px] px-2 py-0.5 rounded-full' : 'top-1 right-1 w-3 h-3 rounded-full text-transparent'}`}>{isSidebarOpen ? pendingCount : ''}</span>}
               </button>
             ))}
           </nav>
         </div>
-        <div className="p-4 border-t border-slate-100 flex items-center gap-3">
-          <button onClick={onLogout} className="p-2 bg-slate-100 text-red-600 rounded-full hover:bg-red-100"><LogOut size={18}/></button>
-          <div className="hidden md:block">
-            <p className="text-xs font-semibold text-green-500">Online</p>
-            <p className="text-sm font-bold text-slate-700">Admin Mode</p>
-          </div>
+        <div className={`p-4 border-t border-slate-100 flex items-center gap-3 ${!isSidebarOpen ? 'justify-center' : ''}`}>
+          <button onClick={onLogout} className="p-2 bg-slate-100 text-red-600 rounded-full hover:bg-red-100 shrink-0"><LogOut size={18}/></button>
+          {isSidebarOpen && (
+            <div className="whitespace-nowrap overflow-hidden">
+              <p className="text-xs font-semibold text-green-500">Online</p>
+              <p className="text-sm font-bold text-slate-700 truncate">Admin Mode</p>
+            </div>
+          )}
         </div>
       </div>
 
+      {/* KONTEN UTAMA */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
+        {/* HEADER TOP BAR UNTUK TOGGLE SIDEBAR */}
+        <div className="bg-white border-b border-slate-200 shadow-sm p-4 flex items-center gap-4 z-10 shrink-0">
+           <button onClick={()=>setIsSidebarOpen(!isSidebarOpen)} className="p-2 bg-slate-100 rounded-lg hover:bg-slate-200 text-slate-700 transition-colors"><MenuIcon size={24}/></button>
+           <h2 className="font-bold text-lg text-slate-800 hidden md:block">Tabetai Dashboard</h2>
+        </div>
+
         {activeTab === 'kasir' && (
           <div className="flex-1 flex overflow-hidden bg-slate-50">
             <div className="flex-[2] flex flex-col h-full border-r border-slate-200">
@@ -1024,7 +962,8 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
             </div>
 
             <div className="w-[350px] lg:w-[400px] bg-white flex flex-col h-full">
-              <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h2 className="text-xl font-bold">Pesanan <span className="bg-red-100 text-red-600 text-sm py-0.5 px-2 rounded-full">{cart.reduce((a,c)=>a+c.qty,0)}</span></h2>{cart.length>0 && <button onClick={()=>setCart([])} className="text-red-500 text-sm font-semibold">Kosongkan</button>}</div>
+              <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h2 className="text-xl font-bold flex items-center gap-2">Pesanan <span className="bg-red-100 text-red-600 text-sm py-0.5 px-2 rounded-full">{cart.reduce((a,c)=>a+c.qty,0)}</span></h2>{cart.length>0 && <button onClick={()=>{if(window.confirm('Kosongkan keranjang?')) { setCart([]); setActiveBill(null); }}} className="text-red-500 text-sm font-semibold hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors cursor-pointer relative z-10">Kosongkan</button>}</div>
+              {activeBill && <div className="px-4 py-2 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><span className="text-orange-700 text-xs font-bold uppercase tracking-wider">Sedang Edit Bill: {activeBill.name}</span><button onClick={() => { if(window.confirm('Tutup mode edit? Perubahan yang belum di-save akan hilang.')) { setCart([]); setActiveBill(null); } }} className="text-orange-600 hover:text-red-500 bg-orange-100 p-1 rounded-full shadow-sm"><X size={14}/></button></div>}
               <div className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3">
                 {cart.map((item, idx) => (
                   <div key={idx} className="bg-white p-3 rounded-xl border border-slate-100 flex items-center gap-3">
@@ -1049,7 +988,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                 {discountAmount > 0 && <div className="flex justify-between items-center mb-1 text-green-600"><span className="text-sm">Diskon Promo ({appliedPromo?.code})</span><span className="font-semibold">-{formatRp(discountAmount)}</span></div>}
                 <div className="flex justify-between items-center mb-3 pt-2 border-t border-slate-100"><span className="text-slate-800 font-bold">Total Akhir</span><span className="text-2xl font-black text-red-600">{formatRp(calculateTotal())}</span></div>
                 <div className="flex gap-2">
-                  <button onClick={() => { if (cart.length > 0) setShowSaveBillModal(true); }} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl font-bold"><FolderOpen size={24} /></button>
+                  <button onClick={() => { if (cart.length > 0) { if(activeBill) handleAutoSaveBill(); else setShowSaveBillModal(true); } }} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl font-bold flex justify-center items-center"><FolderOpen size={24} /></button>
                   <button onClick={() => { if (cart.length > 0) setCheckoutModal(true); }} className="flex-1 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200">Pilih Pembayaran</button>
                 </div>
               </div>
@@ -1058,7 +997,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         )}
 
         {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
-        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveTab('kasir'); deleteDoc(getDocRef('savedBills', b.dbId)); }} />}
+        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
         {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
@@ -1077,9 +1016,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                 )}
                 {paymentMethod === 'QRIS' && (
                   <div className="mb-6 flex justify-center">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-48 relative">
-                      <img src={qrisImageUrl} alt="QRIS" className="w-full object-contain" />
-                    </div>
+                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-48 relative"><img src={qrisImageUrl} alt="QRIS" className="w-full object-contain" /></div>
                   </div>
                 )}
                 <button onClick={handleCheckout} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black text-lg">Proses</button>
@@ -1088,9 +1025,47 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
+        {}
+        {/* MODAL OPEN BILL DENGAN MEMBER SELECT */}
         {showSaveBillModal && (
           <div className="fixed inset-0 bg-slate-900/50 flex justify-center items-center z-50 p-4">
-            <div className="bg-white p-6 rounded-3xl w-full max-w-sm"><h3 className="text-xl font-bold mb-4">Simpan Tagihan</h3><input autoFocus type="text" placeholder="Meja 4 / Nama" value={billName} onChange={e=>setBillName(e.target.value)} className="w-full p-3 rounded-xl border mb-4" /><div className="flex gap-2"><button onClick={()=>setShowSaveBillModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold">Batal</button><button onClick={handleSaveBill} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold">Simpan</button></div></div>
+            <div className="bg-white rounded-3xl w-full max-w-md overflow-visible flex flex-col min-h-[520px] max-h-[90vh]">
+              <div className="p-5 border-b border-slate-100 bg-slate-50"><h3 className="text-xl font-bold">Simpan Tagihan</h3></div>
+              <div className="p-6 flex-1 overflow-visible">
+                <div className="flex gap-2 mb-4 bg-slate-100 p-1 rounded-xl">
+                  <button onClick={()=>setBillCustomerType('existing')} className={`flex-1 py-2 text-sm font-bold rounded-lg ${billCustomerType==='existing'?'bg-white shadow text-red-600':'text-slate-500'}`}>Pilih Member</button>
+                  <button onClick={()=>setBillCustomerType('new')} className={`flex-1 py-2 text-sm font-bold rounded-lg ${billCustomerType==='new'?'bg-white shadow text-red-600':'text-slate-500'}`}>Baru / Guest</button>
+                </div>
+                
+                {billCustomerType === 'existing' ? (
+                  <div className="relative overflow-visible">
+                    <label className="block text-sm font-bold text-slate-700 mb-2">Cari Member (Nama/No.HP)</label>
+                    <input type="text" value={memberSearch} onChange={e => { setMemberSearch(e.target.value); setShowMemberDropdown(true); setSelectedMemberId(''); }} onFocus={() => setShowMemberDropdown(true)} placeholder="Ketik nama atau No. WA..." className="w-full p-3 rounded-xl border border-slate-300 focus:border-red-500 outline-none" />
+                    {showMemberDropdown && memberSearch && (
+                      <div className="absolute w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-72 overflow-y-auto z-50">
+                        {members.filter(m => m.name.toLowerCase().includes(memberSearch.toLowerCase()) || (m.phone && m.phone.includes(memberSearch))).map(m => (
+                          <div key={m.dbId} className="p-3 hover:bg-slate-50 cursor-pointer border-b border-slate-50 last:border-0" onClick={() => { setMemberSearch(`${m.name} - ${m.phone}`); setSelectedMemberId(m.dbId); setShowMemberDropdown(false); }}>
+                            <div className="font-bold text-sm text-slate-800">{m.name}</div><div className="text-xs text-slate-500">{m.phone}</div>
+                          </div>
+                        ))}
+                        {members.filter(m => m.name.toLowerCase().includes(memberSearch.toLowerCase()) || (m.phone && m.phone.includes(memberSearch))).length === 0 && (
+                          <div className="p-3 text-slate-500 text-sm text-center">Member tidak ditemukan</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    <div><label className="block text-sm font-bold text-slate-700 mb-1">Nama Guest / Meja</label><input autoFocus type="text" value={newMemberName} onChange={e=>setNewMemberName(e.target.value)} placeholder="Contoh: Meja 4 / Budi" className="w-full p-3 rounded-xl border border-slate-300 focus:border-red-500 outline-none" /></div>
+                    <div><label className="block text-sm font-bold text-slate-700 mb-1">No. WA (Opsional)</label><input type="text" value={newMemberPhone} onChange={e=>setNewMemberPhone(e.target.value)} placeholder="Isi untuk auto-register member" className="w-full p-3 rounded-xl border border-slate-300 focus:border-red-500 outline-none" /><p className="text-xs text-slate-500 mt-1">*Jika diisi, otomatis terdaftar sebagai member</p></div>
+                  </div>
+                )}
+              </div>
+              <div className="p-5 border-t border-slate-100 flex gap-2 bg-slate-50 rounded-b-3xl">
+                <button onClick={()=>setShowSaveBillModal(false)} className="flex-1 py-3 bg-slate-100 rounded-xl font-bold">Batal</button>
+                <button onClick={handleSaveBill} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-bold">Simpan</button>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1103,7 +1078,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 }
 
 function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showToast, onPrint }) {
-  const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
+  const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pembayaran Diterima', 'Diproses', 'Selesai', 'Dibatalkan'];
   
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDate, setFilterDate] = useState("");
@@ -1121,7 +1096,6 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     if (!target) return;
     try {
       const updates = { status: newStatus };
-      
       if (newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
@@ -1135,15 +1109,10 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             if (menuTarget) {
               const deductQty = Number(item.quantity || item.qty || 1);
               const variantName = item.variant || item.variantId;
-              
-              const updatedVariants = menuTarget.variants.map(v => 
-                v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
-              );
-              
+              const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v);
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
               if (totalQty <= 0) menuUpdates.isActive = false; 
-              
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
@@ -1156,33 +1125,24 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             if (menuTarget) {
               const addQty = Number(item.quantity || item.qty || 1);
               const variantName = item.variant || item.variantId;
-              
-              const updatedVariants = menuTarget.variants.map(v => 
-                v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
-              );
+              const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v);
               await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
             }
           }
         }
-        
         if (target.discount && target.discount.dbId) {
           const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
           if (promoToUpdate) {
             const updatedUsedBy = (promoToUpdate.usedBy || []).filter(phone => phone !== target.customerPhone);
-            await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
-              stock: (promoToUpdate.stock || 0) + 1,
-              usedBy: updatedUsedBy
-            });
+            await updateDoc(getDocRef('promos', promoToUpdate.dbId), { stock: (promoToUpdate.stock || 0) + 1, usedBy: updatedUsedBy });
           }
         }
-
         if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = false;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
           if (member) await updateDoc(getDocRef('members', member.dbId), { points: Math.max(0, (member.points || 0) - (target.earnedPoints || 0)) });
         }
       }
-      
       await updateDoc(getDocRef('transactions', target.dbId), updates);
       showToast(`Status diubah ke ${newStatus}`);
     } catch(e) { showToast("Gagal update status", "error"); }
@@ -1192,9 +1152,7 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     let result = orders.filter(o => {
       const query = searchQuery.toLowerCase();
       const matchSearch = (o.customer && o.customer.toLowerCase().includes(query)) || (o.id && o.id.toLowerCase().includes(query));
-      
       const matchStatus = filterStatus === 'Semua' || o.status === filterStatus;
-
       let matchDate = true;
       if (filterDate) {
         const [y, m, d] = filterDate.split('-');
@@ -1202,24 +1160,19 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
         const idFormat2 = `${parseInt(d)}/${parseInt(m)}/${y}`;
         matchDate = o.filterDateKey === filterDate || (o.date && (o.date.includes(idFormat1) || o.date.includes(idFormat2)));
       }
-
       return matchSearch && matchStatus && matchDate;
     });
 
     return [...result].sort((a, b) => {
       const timeA = Number(a.timestamp) || 0;
       const timeB = Number(b.timestamp) || 0;
-      if (sortOrder === "Terbaru") {
-        return timeB - timeA;
-      } else {
-        return timeA - timeB;
-      }
+      return sortOrder === "Terbaru" ? timeB - timeA : timeA - timeB;
     });
   }, [orders, searchQuery, filterDate, filterStatus, sortOrder]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
-      <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 sticky top-0">
+      <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 shrink-0">
         <h2 className="text-2xl font-bold mb-4">Manajemen Pesanan</h2>
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -1246,23 +1199,20 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             <p className="text-center text-slate-500 mt-10">Tidak ada pesanan yang sesuai filter.</p>
           ) : (
             filteredOrders.map(order => (
-              <div key={order.dbId} className={`p-5 rounded-2xl shadow-sm border flex flex-col gap-4 relative overflow-hidden transition-all duration-300 ${order.status === 'Menunggu Pembayaran' ? 'border-blue-400 shadow-[0_0_15px_rgba(96,165,250,0.3)] bg-blue-50/50' : 'bg-white border-slate-100'}`}>
-                {order.status === 'Menunggu Pembayaran' && (
-                  <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500 animate-pulse" />
-                )}
+              <div key={order.dbId} className={`p-5 rounded-2xl shadow-sm border flex flex-col gap-4 relative overflow-hidden transition-all duration-300 ${order.status === 'Menunggu Pembayaran' ? 'border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.3)] bg-blue-50/50' : 'bg-white border-slate-100'}`}>
+                {order.status === 'Menunggu Pembayaran' && <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500 animate-pulse" />}
+                
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                   <div>
                     <p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.time} {order.date && `• ${order.date.split(',')[0]}`}</span></p>
                     <p className="text-sm font-semibold text-red-600">{order.customer}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 md:gap-3">
-                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
+                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
                       {expandedOrders[order.dbId] ? <ChevronLeft className="rotate-90" size={18}/> : <ChevronLeft className="-rotate-90" size={18}/>}
                       {expandedOrders[order.dbId] ? 'Tutup' : 'Buka Pesanan'}
                     </button>
-                    <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm">
-                      <Printer size={18}/> Cetak
-                    </button>
+                    <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm"><Printer size={18}/> Cetak</button>
                     <select value={order.status} onChange={(e) => handleStatusChange(order.dbId, e.target.value)} className="p-2 border rounded-xl bg-slate-50 font-bold text-sm">
                       {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -1288,20 +1238,9 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
                     </div>
                     
                     <div className="flex flex-col gap-1 items-end pt-3 border-t border-dashed border-slate-200">
-                      <div className="flex justify-between w-56 text-sm text-slate-500">
-                        <span>Subtotal:</span>
-                        <span>{formatRp(order.originalTotal || order.total + (order.discount?.value || 0))}</span>
-                      </div>
-                      {order.discount && order.discount.value > 0 && (
-                        <div className="flex justify-between w-56 text-sm text-green-600">
-                          <span>Diskon Promo ({order.discount.code}):</span>
-                          <span>-{formatRp(order.discount.value)}</span>
-                        </div>
-                      )}
-                      <div className="flex justify-between w-56 text-base font-bold text-slate-800 mt-2 pt-2 border-t border-slate-200">
-                        <span>Total Akhir:</span>
-                        <span className="text-red-600">{formatRp(order.total)}</span>
-                      </div>
+                      <div className="flex justify-between w-56 text-sm text-slate-500"><span>Subtotal:</span><span>{formatRp(order.originalTotal || order.total + (order.discount?.value || 0))}</span></div>
+                      {order.discount && order.discount.value > 0 && <div className="flex justify-between w-56 text-sm text-green-600"><span>Diskon Promo ({order.discount.code}):</span><span>-{formatRp(order.discount.value)}</span></div>}
+                      <div className="flex justify-between w-56 text-base font-bold text-slate-800 mt-2 pt-2 border-t border-slate-200"><span>Total Akhir:</span><span className="text-red-600">{formatRp(order.total)}</span></div>
                     </div>
                   </div>
                 )}
@@ -1331,14 +1270,11 @@ function AdminOpenBill({ savedBills, db, handleLoadBill }) {
 
 function AdminMenuManager({ menus, db, formatRp, showToast }) {
   const [form, setForm] = useState(null);
+  const [searchMenu, setSearchMenu] = useState("");
   
   const handleToggleVisibility = async (id, currentStatus) => {
-    try {
-      await updateDoc(getDocRef('menu', id), { isActive: !currentStatus });
-      showToast(currentStatus ? "Menu disembunyikan" : "Menu ditampilkan", "success");
-    } catch(e) {
-      showToast("Gagal mengubah status", "error");
-    }
+    try { await updateDoc(getDocRef('menu', id), { isActive: !currentStatus }); showToast(currentStatus ? "Menu disembunyikan" : "Menu ditampilkan", "success"); } 
+    catch(e) { showToast("Gagal mengubah status", "error"); }
   };
 
   const handleSave = async (e) => {
@@ -1357,10 +1293,22 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
       <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Menu</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
       <form onSubmit={handleSave} className="max-w-2xl space-y-4">
         <div className="flex gap-4 items-center"><input type="checkbox" checked={form.isActive!==false} onChange={e=>setForm({...form, isActive: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold">Tampilkan di Kasir/App</label></div>
-        <div><label className="font-bold text-sm">Nama</label><input required value={form.name} onChange={e=>setForm({...form, name: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+        <div><label className="font-bold text-sm">Nama Menu</label><input required value={form.name} onChange={e=>setForm({...form, name: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
         <div><label className="font-bold text-sm">Deskripsi Singkat</label><textarea value={form.desc || ''} onChange={e=>setForm({...form, desc: e.target.value})} placeholder="Jelaskan komposisi makanan ini..." className="w-full p-3 border rounded-xl resize-none outline-none focus:border-slate-400" rows="2" /></div>
         <div className="flex gap-4"><div className="flex-1"><label className="font-bold text-sm">Harga (Rp)</label><input type="number" required value={form.price} onChange={e=>setForm({...form, price: e.target.value})} className="w-full p-3 border rounded-xl" /></div><div className="w-24"><label className="font-bold text-sm">Urutan</label><input type="number" value={form.orderPriority||99} onChange={e=>setForm({...form, orderPriority: e.target.value})} className="w-full p-3 border rounded-xl text-center" /></div></div>
         <div><label className="font-bold text-sm">URL Gambar</label><input required type="url" value={form.image} onChange={e=>setForm({...form, image: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+        
+        {/* FITUR AUTO-HIDE WAKTU */}
+        <div className="border-t pt-4 bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2">
+           <div className="flex items-center gap-2 mb-3"><input type="checkbox" checked={form.isTimeRestricted||false} onChange={e=>setForm({...form, isTimeRestricted: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-sm">Batasi Waktu Penjualan</label></div>
+           {form.isTimeRestricted && (
+              <div className="flex gap-4">
+                 <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">Jam Mulai (HH:MM)</label><input type="time" value={form.startTime||''} onChange={e=>setForm({...form, startTime: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+                 <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">Jam Berakhir (HH:MM)</label><input type="time" value={form.endTime||''} onChange={e=>setForm({...form, endTime: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+              </div>
+           )}
+        </div>
+
         <div className="border-t pt-4"><label className="font-bold mb-2 block">Varian & Stok <button type="button" onClick={()=>setForm({...form, variants: [...form.variants, {name:'',qty:0}]})} className="bg-slate-900 text-white px-2 py-1 rounded text-xs ml-2">Tambah</button></label>
           {form.variants.map((v, i) => <div key={i} className="flex gap-2 mb-2"><input required placeholder="Nama" value={v.name} onChange={e=>{const va=[...form.variants]; va[i].name=e.target.value; setForm({...form, variants:va})}} className="flex-1 p-2 border rounded-lg"/><input type="number" required value={v.qty} onChange={e=>{const va=[...form.variants]; va[i].qty=Number(e.target.value); setForm({...form, variants:va})}} className="w-20 p-2 border rounded-lg text-center"/><button type="button" onClick={()=>{const va=[...form.variants]; va.splice(i,1); setForm({...form, variants:va})}} className="p-2 text-red-500"><X size={16}/></button></div>)}
         </div>
@@ -1369,28 +1317,31 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
     </div>
   );
 
-  const sortedMenus = [...menus].sort((a, b) => {
-    const aActive = a.isActive !== false;
-    const bActive = b.isActive !== false;
-    if (aActive && !bActive) return -1;
-    if (!aActive && bActive) return 1;
+  const sortedMenus = menus.filter(m => m.name.toLowerCase().includes(searchMenu.toLowerCase())).sort((a, b) => {
+    const aActive = a.isActive !== false; const bActive = b.isActive !== false;
+    if (aActive && !bActive) return -1; if (!aActive && bActive) return 1;
     return (a.orderPriority || 99) - (b.orderPriority || 99);
   });
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Manajemen Menu</h2><button onClick={()=>setForm({name:'', desc:'', price:'', image:'', isActive:true, orderPriority:99, variants:[{name:'Reguler',qty:100}]})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2"><Plus size={18}/> Tambah</button></div>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
+      <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+        <h2 className="text-2xl font-bold">Manajemen Menu</h2>
+        <div className="flex gap-2">
+           <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16} /><input type="text" placeholder="Cari menu..." value={searchMenu} onChange={e=>setSearchMenu(e.target.value)} className="pl-9 pr-3 py-2 border rounded-xl outline-none" /></div>
+           <button onClick={()=>setForm({name:'', desc:'', price:'', image:'', isActive:true, orderPriority:99, isTimeRestricted: false, startTime: '', endTime: '', variants:[{name:'Reguler',qty:100}]})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2"><Plus size={18}/> Tambah</button>
+        </div>
+      </div>
       <div className="space-y-3">
         {sortedMenus.map((menu, index) => (
           <div key={menu.dbId} className={`bg-white p-4 rounded-2xl flex justify-between items-center ${menu.isActive===false?'opacity-50 grayscale':''}`}>
             <div className="flex gap-3 items-center">
               <span className="font-bold text-slate-400 text-lg w-6 text-center">{index + 1}</span>
               <img src={menu.image} className="w-16 h-16 rounded-xl object-cover" />
-              <div><h3 className="font-bold">{menu.name} {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider ml-2">Hidden</span>}</h3><p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p></div>
+              <div><h3 className="font-bold">{menu.name} {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider ml-2">Hidden</span>} {menu.isTimeRestricted && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold ml-1"><Clock size={10} className="inline mr-1"/>Waktu</span>}</h3><p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p></div>
             </div>
             <div className="flex gap-2">
-              <button onClick={() => handleToggleVisibility(menu.dbId, menu.isActive !== false)} className={`p-2 rounded-lg ${menu.isActive !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}>
-                {menu.isActive !== false ? <Eye size={18} /> : <EyeOff size={18} />}
-              </button>
+              <button onClick={() => handleToggleVisibility(menu.dbId, menu.isActive !== false)} className={`p-2 rounded-lg ${menu.isActive !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}><Eye size={18} /></button>
               <button onClick={()=>setForm(menu)} className="p-2 bg-blue-50 text-blue-600 rounded-lg"><Edit2 size={18}/></button>
               <button onClick={()=>deleteDoc(getDocRef('menu', menu.dbId))} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={18}/></button>
             </div>
@@ -1403,71 +1354,30 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
 
 function AdminMemberManager({ members, db, showToast }) {
   const [editingMember, setEditingMember] = useState(null);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    try {
-      await updateDoc(getDocRef('members', editingMember.dbId), {
-        name: editingMember.name,
-        phone: editingMember.phone,
-        points: Number(editingMember.points) 
-      });
-      setEditingMember(null);
-      showToast("Data member berhasil diperbarui!", "success");
-    } catch (error) {
-      showToast("Gagal memperbarui data member", "error");
-    }
-  };
+  const filteredMembers = members.filter(m => m.name.toLowerCase().includes(searchQuery.toLowerCase()) || (m.phone && m.phone.includes(searchQuery)));
+
+  const handleSave = async (e) => { e.preventDefault(); try { await updateDoc(getDocRef('members', editingMember.dbId), { name: editingMember.name, phone: editingMember.phone, points: Number(editingMember.points) }); setEditingMember(null); showToast("Data member diperbarui!", "success"); } catch (error) { showToast("Gagal memperbarui data", "error"); } };
 
   return (
     <div className="flex-1 p-6 overflow-y-auto bg-slate-50 relative">
-      <h2 className="text-2xl font-bold mb-6">Daftar Member</h2>
+      <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+        <h2 className="text-2xl font-bold">Daftar Member</h2>
+        <div className="relative w-full md:w-64"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input type="text" placeholder="Cari nama / no wa..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:border-red-500 outline-none" /></div>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {members.map(m => (
+        {filteredMembers.map(m => (
           <div key={m.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-            <div>
-              <h3 className="font-bold text-slate-800">{m.name}</h3>
-              <p className="text-slate-500 text-sm mt-0.5">{m.phone}</p>
-              <p className="text-yellow-600 font-bold text-sm mt-1">{m.points || 0} Poin</p>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => setEditingMember(m)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors">
-                <Edit2 size={18} />
-              </button>
-              <button onClick={() => { if(window.confirm('Hapus member ini?')) deleteDoc(getDocRef('members', m.dbId)) }} className="p-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors">
-                <Trash2 size={18}/>
-              </button>
-            </div>
+            <div><h3 className="font-bold text-slate-800">{m.name}</h3><p className="text-slate-500 text-sm mt-0.5">{m.phone}</p><p className="text-yellow-600 font-bold text-sm mt-1">{m.points || 0} Poin</p></div>
+            <div className="flex gap-2"><button onClick={() => setEditingMember(m)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => { if(window.confirm('Hapus member ini?')) deleteDoc(getDocRef('members', m.dbId)) }} className="p-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={18}/></button></div>
           </div>
         ))}
+        {filteredMembers.length === 0 && <p className="text-slate-500 col-span-2 text-center py-10">Member tidak ditemukan</p>}
       </div>
 
       {editingMember && (
-        <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95">
-            <div className="p-5 border-b border-slate-100 flex justify-between bg-slate-50">
-              <h3 className="font-black text-xl text-slate-800">Edit Member</h3>
-              <button onClick={() => setEditingMember(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button>
-            </div>
-            <form onSubmit={handleSave} className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Nama Member</label>
-                <input type="text" required value={editingMember.name} onChange={e => setEditingMember({...editingMember, name: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">No. WhatsApp</label>
-                <input type="tel" required value={editingMember.phone} onChange={e => setEditingMember({...editingMember, phone: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
-              </div>
-              <div>
-                <label className="block text-sm font-bold text-slate-700 mb-1">Jumlah Poin</label>
-                <input type="number" required value={editingMember.points} onChange={e => setEditingMember({...editingMember, points: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" />
-              </div>
-              <button type="submit" className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl mt-4 transition-colors">
-                Simpan Perubahan
-              </button>
-            </form>
-          </div>
-        </div>
+        <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4 backdrop-blur-sm"><div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl animate-in fade-in zoom-in-95"><div className="p-5 border-b border-slate-100 flex justify-between bg-slate-50"><h3 className="font-black text-xl text-slate-800">Edit Member</h3><button onClick={() => setEditingMember(null)} className="text-slate-400 hover:text-slate-600"><X size={20}/></button></div><form onSubmit={handleSave} className="p-6 space-y-4"><div><label className="block text-sm font-bold text-slate-700 mb-1">Nama Member</label><input type="text" required value={editingMember.name} onChange={e => setEditingMember({...editingMember, name: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" /></div><div><label className="block text-sm font-bold text-slate-700 mb-1">No. WhatsApp</label><input type="tel" required value={editingMember.phone} onChange={e => setEditingMember({...editingMember, phone: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" /></div><div><label className="block text-sm font-bold text-slate-700 mb-1">Jumlah Poin</label><input type="number" required value={editingMember.points} onChange={e => setEditingMember({...editingMember, points: e.target.value})} className="w-full px-4 py-3 border border-slate-200 focus:border-red-500 outline-none rounded-xl" /></div><button type="submit" className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl mt-4 transition-colors">Simpan Perubahan</button></form></div></div>
       )}
     </div>
   );
@@ -1475,116 +1385,45 @@ function AdminMemberManager({ members, db, showToast }) {
 
 function AdminPromoManager({ promos, menus, db, formatRp, showToast }) {
   const [form, setForm] = useState(null);
-  
-  const handleMenuToggle = (menuId) => {
-    let current = form.applicableMenus || ['all'];
-    if (current.includes('all')) current = [];
-
-    if (current.includes(menuId)) {
-      current = current.filter(id => id !== menuId);
-      if (current.length === 0) current = ['all'];
-    } else {
-      current = [...current, menuId];
-    }
-    setForm({ ...form, applicableMenus: current });
-  };
-
+  const handleMenuToggle = (menuId) => { let current = form.applicableMenus || ['all']; if (current.includes('all')) current = []; if (current.includes(menuId)) { current = current.filter(id => id !== menuId); if (current.length === 0) current = ['all']; } else { current = [...current, menuId]; } setForm({ ...form, applicableMenus: current }); };
   const isAllMenus = !form?.applicableMenus || form?.applicableMenus.includes('all') || form?.applicableMenus.length === 0;
-
-  const sortedMenus = useMemo(() => {
-    return [...menus].sort((a, b) => a.name.localeCompare(b.name));
-  }, [menus]);
+  const sortedMenus = useMemo(() => [...menus].sort((a, b) => a.name.localeCompare(b.name)), [menus]);
 
   const handleSave = async (e) => { 
     e.preventDefault(); 
     try { 
-      const data = { 
-        ...form, 
-        value: Number(form.value), 
-        stock: Number(form.stock),
-        maxDiscount: Number(form.maxDiscount) || 0,
-        minQty: Number(form.minQty) || 0
-      };
-      if (!data.usedBy) data.usedBy = []; 
-      if (!data.applicableMenus) data.applicableMenus = ['all'];
-      
-      if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); 
-      else await addDoc(getColRef('promos'), data); 
-      
-      setForm(null); 
-      showToast("Promo disimpan"); 
-    } catch(e){ 
-      showToast("Gagal menyimpan promo", "error"); 
-    } 
+      const data = { ...form, value: Number(form.value), stock: Number(form.stock), maxDiscount: Number(form.maxDiscount) || 0, minQty: Number(form.minQty) || 0, minNonPromoQty: Number(form.minNonPromoQty) || 0 };
+      if (!data.usedBy) data.usedBy = []; if (!data.applicableMenus) data.applicableMenus = ['all'];
+      if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); else await addDoc(getColRef('promos'), data); 
+      setForm(null); showToast("Promo disimpan"); 
+    } catch(e){ showToast("Gagal menyimpan promo", "error"); } 
   };
 
   if(form) return (
-    <div className="flex-1 p-6 bg-white overflow-y-auto">
-      <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
+    <div className="flex-1 p-6 bg-white overflow-y-auto"><div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
       <form onSubmit={handleSave} className="max-w-md space-y-4">
         <input required placeholder="KODE (Cth: PROMO50)" value={form.code} onChange={e=>setForm({...form, code:e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl uppercase"/>
-        
-        <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl">
-          <option value="percent">Persentase (%)</option>
-          <option value="nominal">Nominal (Rp)</option>
-        </select>
-        
+        <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl"><option value="percent">Persentase (%)</option><option value="nominal">Nominal (Rp)</option></select>
         <input required type="number" placeholder="Nilai Diskon" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        {form.type === 'percent' && (<div><label className="block text-xs font-bold text-slate-500 mb-1">Maksimal Potongan (Rp)</label><input type="number" placeholder="Isi 0 jika tanpa batas" value={form.maxDiscount || ''} onChange={e=>setForm({...form, maxDiscount:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>)}
+        <div><label className="block text-xs font-bold text-slate-500 mb-1">Minimal Pembelian (Qty Item Promo)</label><input type="number" placeholder="Isi 0 jika tanpa batas" value={form.minQty || ''} onChange={e=>setForm({...form, minQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>
+        <div><label className="block text-xs font-bold text-slate-500 mb-1">Stok / Kuota Penggunaan Promo</label><input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>
         
-        {form.type === 'percent' && (
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1">Maksimal Potongan (Rp)</label>
-            <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.maxDiscount || ''} onChange={e=>setForm({...form, maxDiscount:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
-          </div>
-        )}
+        {/* FITUR TRIGGER PEMBELIAN NON-PROMO */}
+        <div className="border-t pt-3 mt-2"><div className="flex items-center gap-2 mb-2"><input type="checkbox" checked={form.requireNonPromoItem||false} onChange={e=>setForm({...form, requireNonPromoItem: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-sm">Syarat Pembelian Menu Lain</label></div>{form.requireNonPromoItem && (<div><label className="block text-xs font-bold text-slate-500 mb-1">Jumlah Minimal Menu Lain Yang Harus Dibeli</label><input type="number" value={form.minNonPromoQty || 1} min="1" onChange={e=>setForm({...form, minNonPromoQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>)}</div>
 
-        <div>
-          <label className="block text-xs font-bold text-slate-500 mb-1">Minimal Pembelian (Qty Item Berlaku)</label>
-          <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.minQty || ''} onChange={e=>setForm({...form, minQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
-        </div>
-
-        <div>
-          <label className="block text-xs font-bold text-slate-500 mb-1">Stok / Kuota Penggunaan Promo</label>
-          <input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
-        </div>
-        
-        <div className="border-t border-slate-200 pt-4 mt-2">
-          <label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Menu:</label>
-          <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50">
-            <label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200">
-              <input type="checkbox" checked={isAllMenus} onChange={() => setForm({...form, applicableMenus: ['all']})} className="w-5 h-5 accent-red-600"/>
-              <span className="font-bold text-slate-800 text-sm">Semua Menu</span>
-            </label>
-            {sortedMenus.map(m => (
-              <label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1">
-                <input type="checkbox" checked={!isAllMenus && form.applicableMenus?.includes(m.dbId)} onChange={() => handleMenuToggle(m.dbId)} className="w-5 h-5 accent-red-600"/>
-                <span className="text-sm font-medium text-slate-700">{m.name}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex gap-2 items-center pt-2"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-slate-700">Promo Aktif</label></div>
-        <button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl mt-4">Simpan</button>
+        <div className="border-t border-slate-200 pt-4 mt-2"><label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Menu:</label><div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50"><label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200"><input type="checkbox" checked={isAllMenus} onChange={() => setForm({...form, applicableMenus: ['all']})} className="w-5 h-5 accent-red-600"/><span className="font-bold text-slate-800 text-sm">Semua Menu</span></label>{sortedMenus.map(m => (<label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1"><input type="checkbox" checked={!isAllMenus && form.applicableMenus?.includes(m.dbId)} onChange={() => handleMenuToggle(m.dbId)} className="w-5 h-5 accent-red-600"/><span className="text-sm font-medium text-slate-700">{m.name}</span></label>))}</div></div>
+        <div className="flex gap-2 items-center pt-2"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-slate-700">Promo Aktif</label></div><button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl mt-4">Simpan</button>
       </form>
     </div>
   );
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: [], applicableMenus: ['all'], minQty: 0})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: [], applicableMenus: ['all'], minQty: 0, requireNonPromoItem: false, minNonPromoQty: 1})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {promos.map(p => (
           <div key={p.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-            <div>
-              <h3 className="font-black text-xl">{p.code}</h3>
-              <p className="text-slate-500 font-medium text-sm mt-0.5">
-                {p.type==='percent'?`${p.value}%`:formatRp(p.value)} 
-                {p.maxDiscount > 0 ? ` (Maks ${formatRp(p.maxDiscount)})` : ''} 
-              </p>
-              <p className="text-xs text-slate-400 mt-1">
-                Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} • Min Qty: {p.minQty || 0} {p.isActive?'(Aktif)':'(Mati)'}
-              </p>
-            </div>
+            <div><h3 className="font-black text-xl">{p.code}</h3><p className="text-slate-500 font-medium text-sm mt-0.5">{p.type==='percent'?`${p.value}%`:formatRp(p.value)} {p.maxDiscount > 0 ? ` (Maks ${formatRp(p.maxDiscount)})` : ''}</p><p className="text-xs text-slate-400 mt-1">Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} • Min Qty: {p.minQty || 0} {p.isActive?'(Aktif)':'(Mati)'}</p></div>
             <div className="flex gap-2"><button onClick={()=>setForm(p)} className="p-2 bg-blue-50 text-blue-600 rounded-lg"><Edit2 size={18}/></button><button onClick={()=>deleteDoc(getDocRef('promos', p.dbId))} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={18}/></button></div>
           </div>
         ))}
