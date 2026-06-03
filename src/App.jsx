@@ -145,7 +145,12 @@ export default function TabetaiSuperApp() {
 
   const handleRegister = async (name, phone) => {
     if(name.toLowerCase() === ADMIN_CREDENTIALS.username.toLowerCase()) return showToast('Username ini tidak dapat digunakan.', 'error');
-    if(members.find(m => m.name.toLowerCase() === name.toLowerCase() && m.phone === phone)) return showToast('Akun sudah terdaftar. Silakan login.', 'error');
+    
+    // VALIDASI: Mencegah penggunaan nomor WA yang sama
+    if(members.find(m => m.phone === phone)) {
+      return showToast('Nomor WhatsApp sudah terdaftar. Silakan gunakan nomor lain atau login.', 'error');
+    }
+    
     try {
       const newMemberData = { name, phone, points: 0, joinedAt: Date.now() };
       const res = await addDoc(getColRef('members'), newMemberData);
@@ -311,6 +316,18 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     
     try {
       await setDoc(getDocRef('transactions', orderId), newOrderData);
+
+      // --- POTONG STOK PROMO & CATAT PENGGUNAAN ---
+      if (discountObj && discountObj.dbId) {
+        const promoToUpdate = promos.find(p => p.dbId === discountObj.dbId);
+        if (promoToUpdate) {
+          await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
+            stock: Math.max(0, (promoToUpdate.stock || 0) - 1),
+            usedBy: [...(promoToUpdate.usedBy || []), user.phone] // Catat no HP member
+          });
+        }
+      }
+
       setCart([]);
       setView('payment');
       showToast("Pesanan berhasil dibuat!", "success");
@@ -323,6 +340,20 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     if (window.confirm("Apakah Anda yakin ingin membatalkan pesanan ini?")) {
       try {
         await updateDoc(getDocRef('transactions', orderId), { status: 'Dibatalkan' });
+        
+        // --- KEMBALIKAN STOK PROMO JIKA DIBATALKAN ---
+        const target = orders.find(o => o.dbId === orderId);
+        if (target && target.discount && target.discount.dbId) {
+          const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
+          if (promoToUpdate) {
+            const updatedUsedBy = (promoToUpdate.usedBy || []).filter(phone => phone !== target.customerPhone);
+            await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
+              stock: (promoToUpdate.stock || 0) + 1,
+              usedBy: updatedUsedBy
+            });
+          }
+        }
+        
         showToast("Pesanan berhasil dibatalkan", "info");
       } catch (e) {
         showToast("Gagal membatalkan pesanan", "error");
@@ -406,7 +437,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       )}
 
       {view === 'checkout' && (
-        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={(id, d) => setCart(c => c.map(i => i.cartId === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} />
+        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={(id, d) => setCart(c => c.map(i => i.cartId === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} userPhone={user.phone} />
       )}
 
       {view === 'payment' && myOrders[0] && (
@@ -424,14 +455,18 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   );
 }
 
-function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, formatRp, showToast }) {
+function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, formatRp, showToast, userPhone }) {
   const [promoCode, setPromoCode] = useState('');
   const [appliedPromo, setAppliedPromo] = useState(null);
 
   const applyPromo = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
-    if (valid) { setAppliedPromo(valid); showToast(`Promo ${valid.code} diterapkan!`); }
-    else showToast('Kode promo tidak valid', 'error');
+    if (!valid) return showToast('Kode promo tidak valid', 'error');
+    if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
+    if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
+    
+    setAppliedPromo(valid); 
+    showToast(`Promo ${valid.code} diterapkan!`); 
   };
 
   const discountAmount = appliedPromo ? (appliedPromo.type === 'percent' ? Math.floor(subtotal * (appliedPromo.value / 100)) : appliedPromo.value) : 0;
@@ -482,7 +517,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
           <div className="bg-red-50 text-red-700 text-xs text-center p-2 rounded-lg mt-4 font-medium">Dapatkan <strong className="text-red-800">{Math.floor(finalTotal * 0.1)} Poin</strong> dari pesanan ini!</div>
         </div>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"><button onClick={() => onPay(finalTotal, appliedPromo ? { code: appliedPromo.code, value: discountAmount } : null)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 flex justify-center gap-2">Lanjut Pembayaran</button></div>
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"><button onClick={() => onPay(finalTotal, appliedPromo ? { code: appliedPromo.code, value: discountAmount, dbId: appliedPromo.dbId } : null)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 flex justify-center gap-2">Lanjut Pembayaran</button></div>
     </div>
   );
 }
@@ -662,6 +697,9 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const applyPromoCode = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
     if (valid) {
+      if (valid.stock !== undefined && valid.stock <= 0) {
+        setDiscount(0); setAppliedPromo(null); return showToast("Kuota promo sudah habis", "error");
+      }
       const sub = cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
       setDiscount(valid.type === 'percent' ? sub * (valid.value / 100) : valid.value);
       setAppliedPromo(valid);
@@ -696,7 +734,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       id, customer: 'Walk-in / Cashier', items: [...cart], 
       total: calculateTotal(),
       originalTotal: calculateSubtotal(),
-      discount: appliedPromo ? { code: appliedPromo.code, value: discount } : null,
+      discount: appliedPromo ? { code: appliedPromo.code, value: discount, dbId: appliedPromo.dbId } : null,
       status: "Diproses", payment: paymentMethod, 
       isStockDeducted: true,
       time: timeStr,
@@ -705,6 +743,16 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
+      // --- POTONG STOK PROMO JIKA DIGUNAKAN DI KASIR ---
+      if (appliedPromo && appliedPromo.dbId) {
+        const promoToUpdate = promos.find(p => p.dbId === appliedPromo.dbId);
+        if (promoToUpdate) {
+          await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
+            stock: Math.max(0, (promoToUpdate.stock || 0) - 1)
+          });
+        }
+      }
+
       // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
         const menuTarget = menus.find(m => m.dbId === (item.originalId || item.dbId || item.id));
@@ -953,7 +1001,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
-        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
+        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
         {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveTab('kasir'); deleteDoc(getDocRef('savedBills', b.dbId)); }} />}
         {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
@@ -991,7 +1039,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   );
 }
 
-function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, onPrint }) {
+function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showToast, onPrint }) {
   const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pending', 'Diproses', 'Selesai', 'Dibatalkan'];
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -1056,6 +1104,19 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
             }
           }
         }
+        
+        // --- KEMBALIKAN STOK PROMO & CABUT STATUS PENGGUNAAN ---
+        if (target.discount && target.discount.dbId) {
+          const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
+          if (promoToUpdate) {
+            const updatedUsedBy = (promoToUpdate.usedBy || []).filter(phone => phone !== target.customerPhone);
+            await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
+              stock: (promoToUpdate.stock || 0) + 1,
+              usedBy: updatedUsedBy
+            });
+          }
+        }
+
         // Tarik kembali poin jika pelanggan membatalkan pesanan
         if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = false;
@@ -1356,20 +1417,52 @@ function AdminMemberManager({ members, db, showToast }) {
 
 function AdminPromoManager({ promos, db, formatRp, showToast }) {
   const [form, setForm] = useState(null);
-  const handleSave = async (e) => { e.preventDefault(); try { if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), form); else await addDoc(getColRef('promos'), form); setForm(null); showToast("Promo disimpan"); } catch(e){ showToast("Gagal", "error"); } };
+  
+  const handleSave = async (e) => { 
+    e.preventDefault(); 
+    try { 
+      const data = { ...form, value: Number(form.value), stock: Number(form.stock) };
+      if (!data.usedBy) data.usedBy = []; // Ensure usedBy array is prepared
+      
+      if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); 
+      else await addDoc(getColRef('promos'), data); 
+      
+      setForm(null); 
+      showToast("Promo disimpan"); 
+    } catch(e){ 
+      showToast("Gagal menyimpan promo", "error"); 
+    } 
+  };
 
   if(form) return (
-    <div className="flex-1 p-6 bg-white"><div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
-      <form onSubmit={handleSave} className="max-w-md space-y-4"><input required placeholder="KODE (Cth: PROMO50)" value={form.code} onChange={e=>setForm({...form, code:e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl uppercase"/><select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl"><option value="percent">Persentase (%)</option><option value="nominal">Nominal (Rp)</option></select><input required type="number" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/><div className="flex gap-2 items-center"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label>Aktif</label></div><button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl">Simpan</button></form>
+    <div className="flex-1 p-6 bg-white">
+      <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
+      <form onSubmit={handleSave} className="max-w-md space-y-4">
+        <input required placeholder="KODE (Cth: PROMO50)" value={form.code} onChange={e=>setForm({...form, code:e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl uppercase"/>
+        <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl">
+          <option value="percent">Persentase (%)</option>
+          <option value="nominal">Nominal (Rp)</option>
+        </select>
+        <input required type="number" placeholder="Nilai Diskon" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        <input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        
+        <div className="flex gap-2 items-center"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label>Aktif</label></div>
+        <button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl">Simpan</button>
+      </form>
     </div>
   );
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, isActive:true})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: []})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {promos.map(p => (
           <div key={p.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-            <div><h3 className="font-black text-xl">{p.code}</h3><p className="text-slate-500 font-medium">{p.type==='percent'?`${p.value}%`:formatRp(p.value)} {p.isActive?'(Aktif)':'(Mati)'}</p></div>
+            <div>
+              <h3 className="font-black text-xl">{p.code}</h3>
+              <p className="text-slate-500 font-medium">
+                {p.type==='percent'?`${p.value}%`:formatRp(p.value)} • Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} {p.isActive?'(Aktif)':'(Mati)'}
+              </p>
+            </div>
             <div className="flex gap-2"><button onClick={()=>setForm(p)} className="p-2 bg-blue-50 text-blue-600 rounded-lg"><Edit2 size={18}/></button><button onClick={()=>deleteDoc(getDocRef('promos', p.dbId))} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={18}/></button></div>
           </div>
         ))}
