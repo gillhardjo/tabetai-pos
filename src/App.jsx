@@ -4,10 +4,14 @@ import {
   User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer
 } from 'lucide-react';
 
+// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore, collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot, setDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
 
+// ==========================================
+// 1. FIREBASE CONFIGURATION
+// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAwsfBMS0_9gbPayYU-Ry2iFNfF8TMMKVU",
   authDomain: "tabetai-app-v103.firebaseapp.com",
@@ -22,6 +26,7 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
+// Fungsi Helper Path Firebase
 const getColRef = (colName) => {
   let name = colName;
   if (name === 'menu') name = 'menus';
@@ -36,6 +41,9 @@ const getDocRef = (colName, docId) => {
   return doc(db, name, docId);
 };
 
+// ==========================================
+// CONSTANTS & UTILS
+// ==========================================
 const ADMIN_CREDENTIALS = { username: 'admin', phone: '2131' };
 const ADMIN_WA_NUMBER = "6281285557779"; 
 const qrisImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public/qris.png?raw=true";
@@ -56,6 +64,9 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   return `https://wa.me/${waNumber}?text=${text}`;
 };
 
+// ==========================================
+// MAIN APP COMPONENT (ROOT)
+// ==========================================
 export default function TabetaiSuperApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
@@ -94,6 +105,7 @@ export default function TabetaiSuperApp() {
         await signInAnonymously(auth);
         setAuthError(null);
       } catch (error) {
+        console.error("Auth Error:", error);
         setAuthError(error.message);
       } finally {
         setIsAuthReady(true);
@@ -104,9 +116,10 @@ export default function TabetaiSuperApp() {
 
   useEffect(() => {
     if (!isAuthReady) return;
+    
     const unsubMembers = onSnapshot(getColRef('members'), snap => setMembers(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubMenus = onSnapshot(getColRef('menu'), snap => setMenus(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })))); // Di-sort di dalam useMemo Admin
+    const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })))); 
     const unsubPromos = onSnapshot(getColRef('promos'), snap => setPromos(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     
@@ -172,6 +185,10 @@ export default function TabetaiSuperApp() {
   );
 }
 
+
+// ==========================================
+// 1. GUEST VIEW (Login & Register)
+// ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
   const [name, setName] = useState('');
@@ -225,6 +242,10 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
+
+// ==========================================
+// 2. MEMBER APP VIEW (Customer)
+// ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home'); 
   
@@ -531,11 +552,13 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
     <div className="fixed inset-0 z-50 flex justify-center items-end bg-slate-900/60 backdrop-blur-sm">
       <div className="bg-white rounded-t-3xl w-full max-w-md max-h-[90vh] flex flex-col shadow-2xl animate-in slide-in-from-bottom-full overflow-hidden">
         
+        {/* HERO IMAGE BESAR */}
         <div className="relative w-full h-56 md:h-64 bg-slate-100 shrink-0">
           <button onClick={onClose} className="absolute top-4 right-4 p-2 bg-black/40 backdrop-blur-md text-white rounded-full z-10 hover:bg-black/60 transition-colors"><X size={20} /></button>
           <img src={item.image} alt={item.name} className="w-full h-full object-cover" />
         </div>
         
+        {/* INFO JUDUL & DESKRIPSI */}
         <div className="p-6 border-b border-slate-100 shrink-0 bg-white z-10">
           <h2 className="font-bold text-2xl text-slate-800">{item.name}</h2>
           {item.desc && <p className="text-sm text-slate-500 mt-2 leading-relaxed">{item.desc}</p>}
@@ -666,6 +689,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     });
     const id = `POS-${String(maxId + 1).padStart(4, '0')}`;
     
+    // Format Waktu Konsisten: HH:MM
     const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
 
     const newTrx = {
@@ -681,13 +705,21 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     try {
       await setDoc(getDocRef('transactions', id), newTrx);
       
+      // Memotong stok otomatis dan Auto-Hide jika 0
       for (const item of cart) {
-        const menuTarget = menus.find(m => m.dbId === item.originalId);
+        const menuTarget = menus.find(m => m.dbId === (item.originalId || item.dbId || item.id));
         if (menuTarget) {
-          const updatedVariants = menuTarget.variants.map(v => v.name === item.variantId ? { ...v, qty: Math.max(0, v.qty - item.qty) } : v);
+          const deductQty = Number(item.qty || item.quantity || 1);
+          const variantName = item.variantId || item.variant || 'default';
+          
+          const updatedVariants = menuTarget.variants.map(v => 
+            v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
+          );
+          
           const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
           const updates = { variants: updatedVariants };
-          if (totalQty <= 0) updates.isActive = false; 
+          if (totalQty <= 0) updates.isActive = false; // Auto Hide
+          
           await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
         }
       }
@@ -978,7 +1010,9 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
     if (!target) return;
     try {
       const updates = { status: newStatus };
-      if (newStatus === 'Diproses') {
+      
+      // Jika diproses ATAU langsung di-set ke selesai, potong stok!
+      if (newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
@@ -987,17 +1021,49 @@ function AdminOrderManager({ orders, members, menus, db, formatRp, showToast, on
         if (!target.isStockDeducted) {
           updates.isStockDeducted = true;
           for (const item of target.items) {
-            const menuTarget = menus.find(m => m.dbId === (item.dbId || item.originalId));
+            const menuTarget = menus.find(m => m.dbId === (item.dbId || item.originalId || item.id));
             if (menuTarget) {
-              const updatedVariants = menuTarget.variants.map(v => v.name === (item.variant || item.variantId) ? { ...v, qty: Math.max(0, v.qty - (item.quantity||item.qty)) } : v);
+              const deductQty = Number(item.quantity || item.qty || 1);
+              const variantName = item.variant || item.variantId;
+              
+              const updatedVariants = menuTarget.variants.map(v => 
+                v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
+              );
+              
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
-              if (totalQty <= 0) menuUpdates.isActive = false; 
+              if (totalQty <= 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
+              
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
         }
+      } else if (newStatus === 'Dibatalkan') {
+        // Kembalikan Stok jika pesanan dibatalkan
+        if (target.isStockDeducted) {
+          updates.isStockDeducted = false;
+          for (const item of target.items) {
+            const menuTarget = menus.find(m => m.dbId === (item.dbId || item.originalId || item.id));
+            if (menuTarget) {
+              const addQty = Number(item.quantity || item.qty || 1);
+              const variantName = item.variant || item.variantId;
+              
+              const updatedVariants = menuTarget.variants.map(v => 
+                v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
+              );
+              // Jadikan menu Aktif kembali karena stok bertambah
+              await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
+            }
+          }
+        }
+        // Tarik kembali poin jika pelanggan membatalkan pesanan
+        if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
+          updates.isPointsAwarded = false;
+          const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
+          if (member) await updateDoc(getDocRef('members', member.dbId), { points: Math.max(0, (member.points || 0) - (target.earnedPoints || 0)) });
+        }
       }
+      
       await updateDoc(getDocRef('transactions', target.dbId), updates);
       showToast(`Status diubah ke ${newStatus}`);
     } catch(e) { showToast("Gagal update status", "error"); }
