@@ -4,7 +4,6 @@ import {
   User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer, Menu as MenuIcon
 } from 'lucide-react';
 
-// --- FIREBASE IMPORTS ---
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
@@ -51,7 +50,6 @@ const logoImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public
 
 const formatRp = (angka) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(angka || 0);
 
-// Helper Mengecek Waktu Menu Aktif
 const isMenuAvailableByTime = (menu) => {
   if (!menu.isTimeRestricted || !menu.startTime || !menu.endTime) return true;
   const now = new Date();
@@ -63,7 +61,6 @@ const isMenuAvailableByTime = (menu) => {
   return currentMins >= startMins && currentMins <= endMins;
 };
 
-// Helper Menghitung Diskon & Syarat Promo
 const calculatePromoDiscount = (cart, promo) => {
   if (!promo) return { discount: 0, error: null };
   let eligibleSubtotal = 0;
@@ -86,7 +83,6 @@ const calculatePromoDiscount = (cart, promo) => {
   if (eligibleQty === 0) return { discount: 0, error: 'Promo tidak berlaku untuk menu di keranjang Anda' };
   if (promo.minQty > 0 && eligibleQty < promo.minQty) return { discount: 0, error: `Minimal pembelian ${promo.minQty} item menu promo` };
 
-  // Syarat Pembelian Silang (Beli produk lain di luar promo)
   if (promo.requireNonPromoItem && nonPromoQty < (promo.minNonPromoQty || 1)) {
     return { discount: 0, error: `Syarat: Beli minimal ${promo.minNonPromoQty || 1} menu lain di luar menu promo` };
   }
@@ -124,14 +120,12 @@ export default function TabetaiSuperApp() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
   
-  // Realtime Data States
   const [members, setMembers] = useState([]);
   const [menus, setMenus] = useState([]);
   const [orders, setOrders] = useState([]);
   const [promos, setPromos] = useState([]);
   const [savedBills, setSavedBills] = useState([]);
   
-  // Navigation & User State
   const [role, setRole] = useState(() => localStorage.getItem('tbt_role') || 'guest'); 
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = localStorage.getItem('tbt_user');
@@ -166,13 +160,11 @@ export default function TabetaiSuperApp() {
 
   useEffect(() => {
     if (!isAuthReady) return;
-    
     const unsubMembers = onSnapshot(getColRef('members'), snap => setMembers(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubMenus = onSnapshot(getColRef('menu'), snap => setMenus(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubOrders = onSnapshot(getColRef('transactions'), snap => setOrders(snap.docs.map(d => ({ ...d.data(), dbId: d.id })))); 
     const unsubPromos = onSnapshot(getColRef('promos'), snap => setPromos(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
     const unsubBills = onSnapshot(getColRef('savedBills'), snap => setSavedBills(snap.docs.map(d => ({ ...d.data(), dbId: d.id }))));
-    
     return () => { unsubMembers(); unsubMenus(); unsubOrders(); unsubPromos(); unsubBills(); };
   }, [isAuthReady]);
 
@@ -213,8 +205,7 @@ export default function TabetaiSuperApp() {
     setCurrentUser(null);
     localStorage.removeItem('tbt_role');
     localStorage.removeItem('tbt_user');
-    localStorage.removeItem('tbt_cart_member');
-    localStorage.removeItem('tbt_cart_admin');
+    // Membiarkan localstorage cart member agar tersimpan permanen
   };
 
   const activeUser = currentUser ? members.find(m => m.phone === currentUser.phone && m.name.toLowerCase() === currentUser.name.toLowerCase()) || currentUser : null;
@@ -292,7 +283,6 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
-
 // ==========================================
 // 2. MEMBER APP VIEW (Customer)
 // ==========================================
@@ -306,6 +296,8 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   useEffect(() => { localStorage.setItem('tbt_cart_member', JSON.stringify(cart)); }, [cart]);
   
   const [selectedItem, setSelectedItem] = useState(null);
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [claimedPromoCode, setClaimedPromoCode] = useState('');
 
   const getCartTotal = () => cart.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   const getCartCount = () => cart.reduce((sum, item) => sum + item.quantity, 0);
@@ -325,6 +317,9 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   };
 
   const placeOrder = async (finalTotal, discountObj) => {
+    if (isPlacingOrder) return;
+    setIsPlacingOrder(true);
+    
     const earnedPoints = Math.floor(finalTotal * 0.1); 
     
     let maxId = 0;
@@ -350,7 +345,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       earnedPoints: earnedPoints,
       isPointsAwarded: false,
       isStockDeducted: false,
-      status: 'Pembayaran Diterima', // Diganti dari Pending
+      status: 'Menunggu Konfirmasi',
       payment: 'QRIS / Transfer',
       time: timeStr,
       date: dateObj.toLocaleString('id-ID'),
@@ -376,6 +371,8 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       showToast("Pesanan berhasil dibuat!", "success");
     } catch (e) {
       showToast("Gagal memproses pesanan.", "error");
+    } finally {
+      setIsPlacingOrder(false);
     }
   };
 
@@ -411,14 +408,29 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       {view === 'home' && (
         <div className="flex-1 flex flex-col">
           <div className="bg-red-600 pt-12 pb-24 px-6 rounded-b-[40px] text-white shadow-md relative z-10 flex justify-between items-start">
-            <div>
-              <h1 className="text-2xl font-bold mt-1 truncate">{user?.name}-san, Irasshaimase!</h1>
-              <p className="text-red-100 text-sm font-medium">Kyou, nani tabetai?</p>
-              <div className="mt-3 inline-flex items-center gap-1.5 bg-red-700/80 px-4 py-1.5 rounded-full text-sm font-bold shadow-inner border border-red-500/50">
-                <Tag size={14} className="text-yellow-400" /> {user?.points || 0} Poin Tersedia
+            <div className="flex-1 min-w-0 pr-4">
+              <h1 className="text-2xl font-bold mt-1 leading-tight">
+                <span className="block truncate">{user?.name}-san,</span>
+                <span className="block text-xl mt-0.5 opacity-95">Irasshaimase!</span>
+              </h1>
+              <p className="text-red-100 text-sm font-medium mt-1.5">Kyou, nani tabetai?</p>
+              <div className="mt-4 flex items-center gap-3">
+                <div className="inline-flex items-center gap-1.5 bg-red-700/80 px-4 py-1.5 rounded-full text-sm font-bold shadow-inner border border-red-500/50">
+                  <Tag size={14} className="text-yellow-400" /> {user?.points || 0} Poin
+                </div>
+                <button onClick={() => setView('checkout')} className="relative bg-red-700 p-2.5 rounded-full hover:bg-red-800 transition-colors shadow-sm border border-red-500/30">
+                  <ShoppingCart size={18} />
+                  {getCartCount() > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 bg-yellow-400 text-red-900 text-[10px] font-black w-5 h-5 flex items-center justify-center rounded-full border-2 border-red-600 shadow-sm">
+                      {getCartCount()}
+                    </span>
+                  )}
+                </button>
               </div>
             </div>
-            <button onClick={onLogout} className="bg-red-700 p-2.5 rounded-full hover:bg-red-800 transition-colors shadow-sm"><LogOut size={20} /></button>
+            <button onClick={onLogout} className="bg-red-700 p-2.5 rounded-full hover:bg-red-800 transition-colors shadow-sm shrink-0">
+              <LogOut size={20} />
+            </button>
           </div>
           <div className="flex-1 px-6 -mt-16 z-20 relative space-y-4">
             <button onClick={() => setView('menu')} className="w-full bg-white rounded-2xl p-6 shadow-sm border border-slate-100 flex items-center justify-between hover:shadow-md transition-shadow active:scale-[0.98] text-left">
@@ -436,6 +448,9 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
               <ChevronLeft className="text-slate-300 rotate-180" />
             </button>
           </div>
+          
+          <MemberHome user={user} onNavigate={setView} onLogout={onLogout} promos={promos} formatRp={formatRp} onClaimPromo={(code) => { setClaimedPromoCode(code); showToast(`Voucher ${code} diklaim! Silakan pilih menu.`); }} />
+          
           <a href={`https://wa.me/${ADMIN_WA_NUMBER}?text=Halo%20Admin%20Tabetai,%20saya%20${user.name}%20butuh%20bantuan.`} target="_blank" rel="noreferrer" className="absolute bottom-6 right-6 bg-green-500 text-white p-4 rounded-full shadow-lg hover:bg-green-600 transition-transform active:scale-95 z-50">
             <MessageCircle size={28} />
           </a>
@@ -477,7 +492,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       )}
 
       {view === 'checkout' && (
-        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={(id, d) => setCart(c => c.map(i => i.cartId === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} userPhone={user.phone} />
+        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={(id, d) => setCart(c => c.map(i => i.cartId === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} userPhone={user.phone} isPlacingOrder={isPlacingOrder} defaultPromoCode={claimedPromoCode} clearClaimedPromo={() => setClaimedPromoCode('')} />
       )}
 
       {view === 'payment' && myOrders[0] && (
@@ -495,9 +510,95 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   );
 }
 
-function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, formatRp, showToast, userPhone }) {
-  const [promoCode, setPromoCode] = useState('');
+function MemberHome({ user, onNavigate, onLogout, promos, formatRp, onClaimPromo }) {
+  const activePromos = promos?.filter(p => p.isActive !== false) || [];
+
+  return (
+    <div className="flex-1 overflow-y-auto px-6 mt-6 pb-24 space-y-6">
+      <div>
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-bold text-slate-800 text-base">Voucher Promo Spesial 🍱</h3>
+        </div>
+        {activePromos.length > 0 ? (
+          <div className="space-y-3">
+            {activePromos.map((promo) => {
+              // Logika pengecekan ketersediaan voucher untuk user ini
+              const isOutOfStock = promo.stock !== undefined && promo.stock <= 0;
+              const isUsed = promo.usedBy && promo.usedBy.includes(user?.phone);
+              const isUnavailable = isOutOfStock || isUsed;
+
+              return (
+                <div key={promo.dbId} className={`bg-white border-2 border-dashed ${isUnavailable ? 'border-slate-200 opacity-60 grayscale' : 'border-red-200'} rounded-2xl p-4 flex justify-between items-center shadow-sm relative overflow-hidden transition-all`}>
+                  <div className={`absolute -left-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 rounded-full border-r-2 border-dashed ${isUnavailable ? 'border-slate-200' : 'border-red-200'}`}></div>
+                  <div className={`absolute -right-3 top-1/2 -translate-y-1/2 w-6 h-6 bg-slate-50 rounded-full border-l-2 border-dashed ${isUnavailable ? 'border-slate-200' : 'border-red-200'}`}></div>
+                  
+                  <div className="pl-4">
+                    <div className="flex items-center gap-2">
+                      <span className={`${isUnavailable ? 'bg-slate-100 text-slate-500' : 'bg-red-100 text-red-600'} font-extrabold px-2 py-0.5 rounded text-xs tracking-wider uppercase transition-colors`}>
+                        {promo.code}
+                      </span>
+                    </div>
+                    <p className="text-sm font-bold text-slate-800 mt-1.5">
+                      Potongan {promo.type === 'percent' ? `${promo.value}%` : formatRp(promo.value)}
+                    </p>
+                    {promo.maxDiscount > 0 && (
+                      <p className="text-xs text-slate-400 font-medium">Maks potongan {formatRp(promo.maxDiscount)}</p>
+                    )}
+                    {promo.minQty > 0 && (
+                      <p className="text-xs text-slate-500 font-medium mt-0.5">Min. beli {promo.minQty} item</p>
+                    )}
+                    {promo.requireNonPromoItem && (
+                      <p className="text-xs text-purple-600 font-medium mt-0.5">Disertai menu lain</p>
+                    )}
+                  </div>
+                  
+                  <div className="pr-4 flex items-center justify-center">
+                    <button 
+                      disabled={isUnavailable}
+                      onClick={() => { onClaimPromo(promo.code); onNavigate('menu'); }}
+                      className={`${isUnavailable ? 'bg-slate-200 text-slate-500 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 text-white active:scale-95 shadow-md'} text-xs font-bold py-1.5 px-4 rounded-full transition-all`}
+                    >
+                      {isUsed ? 'Terpakai' : isOutOfStock ? 'Habis' : 'Klaim'}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-slate-400 italic">Belum ada promo aktif saat ini.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, formatRp, showToast, userPhone, isPlacingOrder, defaultPromoCode, clearClaimedPromo }) {
+  const [promoCode, setPromoCode] = useState(defaultPromoCode || '');
   const [appliedPromo, setAppliedPromo] = useState(null);
+
+  useEffect(() => {
+    if (defaultPromoCode) {
+      const valid = promos.find(p => p.code === defaultPromoCode.toUpperCase() && p.isActive !== false);
+      if (valid) {
+        if (valid.stock !== undefined && valid.stock <= 0) {
+           showToast('Kuota promo sudah habis', 'error');
+        } else if (valid.usedBy && valid.usedBy.includes(userPhone)) {
+           showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
+        } else {
+           const calculation = calculatePromoDiscount(cart, valid);
+           if (calculation.error) {
+             showToast(`Voucher siap, tapi ${calculation.error.toLowerCase()}`, 'info');
+           } else {
+             setAppliedPromo(valid);
+           }
+           setPromoCode(valid.code);
+        }
+      }
+      clearClaimedPromo();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const applyPromo = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
@@ -524,25 +625,29 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden mb-6">
           <div className="p-4 border-b border-slate-50 bg-slate-50/50"><h2 className="font-bold text-slate-800 text-sm">Daftar Pesanan</h2></div>
           <div className="divide-y divide-slate-50">
-            {cart.map(item => (
-              <div key={item.cartId} className="p-4 flex gap-4">
-                <img src={item.image} alt={item.name} className="w-16 h-16 rounded-xl object-cover" />
-                <div className="flex-1">
-                  <h3 className="font-bold text-slate-800 text-sm">{item.name}</h3>
-                  <p className="text-xs text-slate-500 mt-0.5">Varian: {item.variant}</p>
-                  {item.note && <p className="text-xs text-slate-400 italic">Catatan: {item.note}</p>}
-                  <p className="font-bold text-red-600 text-sm mt-1">{formatRp(item.price)}</p>
-                </div>
-                <div className="flex flex-col items-end justify-between">
-                  <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-slate-100">
-                    <button onClick={() => updateQty(item.cartId, -1)} className="w-7 h-7 bg-white rounded flex items-center justify-center text-slate-600 shadow-sm"><Minus size={14} /></button>
-                    <span className="font-semibold text-sm w-4 text-center">{item.quantity}</span>
-                    <button onClick={() => updateQty(item.cartId, 1)} className="w-7 h-7 bg-white rounded flex items-center justify-center text-red-600 shadow-sm"><Plus size={14} /></button>
+            {cart.length === 0 ? (
+               <div className="p-6 text-center text-slate-400 text-sm font-medium">Keranjang masih kosong</div>
+            ) : (
+              cart.map(item => (
+                <div key={item.cartId} className="p-4 flex gap-4">
+                  <img src={item.image} alt={item.name} className="w-16 h-16 rounded-xl object-cover" />
+                  <div className="flex-1">
+                    <h3 className="font-bold text-slate-800 text-sm">{item.name}</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">Varian: {item.variant}</p>
+                    {item.note && <p className="text-xs text-slate-400 italic">Catatan: {item.note}</p>}
+                    <p className="font-bold text-red-600 text-sm mt-1">{formatRp(item.price)}</p>
                   </div>
-                  <span className="text-xs font-bold text-slate-800 mt-2">{formatRp(item.price * item.quantity)}</span>
+                  <div className="flex flex-col items-end justify-between">
+                    <div className="flex items-center gap-2 bg-slate-50 p-1 rounded-lg border border-slate-100">
+                      <button onClick={() => updateQty(item.cartId, -1)} className="w-7 h-7 bg-white rounded flex items-center justify-center text-slate-600 shadow-sm"><Minus size={14} /></button>
+                      <span className="font-semibold text-sm w-4 text-center">{item.quantity}</span>
+                      <button onClick={() => updateQty(item.cartId, 1)} className="w-7 h-7 bg-white rounded flex items-center justify-center text-red-600 shadow-sm"><Plus size={14} /></button>
+                    </div>
+                    <span className="text-xs font-bold text-slate-800 mt-2">{formatRp(item.price * item.quantity)}</span>
+                  </div>
                 </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 p-4 mb-6">
@@ -562,7 +667,15 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
           <div className="bg-red-50 text-red-700 text-xs text-center p-2 rounded-lg mt-4 font-medium">Dapatkan <strong className="text-red-800">{Math.floor(finalTotal * 0.1)} Poin</strong> dari pesanan ini!</div>
         </div>
       </div>
-      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]"><button onClick={() => onPay(finalTotal, appliedPromo ? { code: appliedPromo.code, value: discountAmount, dbId: appliedPromo.dbId } : null)} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 flex justify-center gap-2">Lanjut Pembayaran</button></div>
+      <div className="absolute bottom-0 left-0 right-0 p-4 bg-white border-t border-slate-100 shadow-[0_-10px_40px_rgba(0,0,0,0.08)]">
+        <button 
+          disabled={isPlacingOrder || cart.length === 0}
+          onClick={() => onPay(finalTotal, appliedPromo ? { code: appliedPromo.code, value: discountAmount, dbId: appliedPromo.dbId } : null)} 
+          className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 rounded-xl flex justify-center items-center gap-2 disabled:bg-slate-300 disabled:cursor-not-allowed transition-colors"
+        >
+          {isPlacingOrder ? "Memproses Pesanan..." : "Lanjut Pembayaran"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -611,7 +724,7 @@ function MemberStatus({ orders, onBack, userPhone, formatRp, onCancelOrder }) {
             </div>
             <div className="flex justify-between items-center mb-4"><span className="text-sm text-slate-500">Total</span><span className="font-bold text-slate-800">{formatRp(order.total)}</span></div>
             <button onClick={() => window.open(generateInvoiceWAUrl(order, userPhone), '_blank')} className="w-full flex justify-center gap-2 text-blue-600 font-semibold border border-blue-100 bg-blue-50 py-2 rounded-lg text-sm"><Download size={14} /> Invoice WA</button>
-            {(order.status === 'Menunggu Pembayaran' || order.status === 'Pembayaran Diterima') && (
+            {(order.status === 'Menunggu Konfirmasi' || order.status === 'Pembayaran Diterima') && (
                <button onClick={() => onCancelOrder(order.dbId)} className="w-full mt-2 flex justify-center gap-2 text-red-600 font-semibold border border-red-100 bg-red-50 py-2 rounded-lg text-sm transition-colors hover:bg-red-100"><X size={14} /> Batalkan Pesanan</button>
             )}
           </div>
@@ -669,7 +782,6 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
   );
 }
 
-
 // ==========================================
 // 3. ADMIN POS VIEW
 // ==========================================
@@ -693,7 +805,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const [variantModal, setVariantModal] = useState(false);
   const [showSaveBillModal, setShowSaveBillModal] = useState(false);
   
-  const [billCustomerType, setBillCustomerType] = useState('existing'); // existing | new
+  const [billCustomerType, setBillCustomerType] = useState('existing');
   const [memberSearch, setMemberSearch] = useState('');
   const [showMemberDropdown, setShowMemberDropdown] = useState(false);
   const [selectedMemberId, setSelectedMemberId] = useState('');
@@ -702,7 +814,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   
   const [activeBill, setActiveBill] = useState(null);
 
-  const pendingCount = orders.filter(o => o.status === 'Menunggu Pembayaran' || o.status === 'Pembayaran Diterima').length;
+  const pendingCount = orders.filter(o => o.status === 'Menunggu Konfirmasi' || o.status === 'Pembayaran Diterima').length;
   
   const prevPendingCount = useRef(pendingCount);
   useEffect(() => {
@@ -961,6 +1073,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
               </div>
             </div>
 
+            {/* KERANJANG KASIR */}
             <div className="w-[350px] lg:w-[400px] bg-white flex flex-col h-full">
               <div className="p-4 border-b border-slate-100 flex justify-between items-center"><h2 className="text-xl font-bold flex items-center gap-2">Pesanan <span className="bg-red-100 text-red-600 text-sm py-0.5 px-2 rounded-full">{cart.reduce((a,c)=>a+c.qty,0)}</span></h2>{cart.length>0 && <button onClick={()=>{if(window.confirm('Kosongkan keranjang?')) { setCart([]); setActiveBill(null); }}} className="text-red-500 text-sm font-semibold hover:bg-red-50 px-3 py-1.5 rounded-lg transition-colors cursor-pointer relative z-10">Kosongkan</button>}</div>
               {activeBill && <div className="px-4 py-2 bg-orange-50 border-b border-orange-100 flex justify-between items-center"><span className="text-orange-700 text-xs font-bold uppercase tracking-wider">Sedang Edit Bill: {activeBill.name}</span><button onClick={() => { if(window.confirm('Tutup mode edit? Perubahan yang belum di-save akan hilang.')) { setCart([]); setActiveBill(null); } }} className="text-orange-600 hover:text-red-500 bg-orange-100 p-1 rounded-full shadow-sm"><X size={14}/></button></div>}
@@ -1025,7 +1138,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
-        {}
         {/* MODAL OPEN BILL DENGAN MEMBER SELECT */}
         {showSaveBillModal && (
           <div className="fixed inset-0 bg-slate-900/50 flex justify-center items-center z-50 p-4">
@@ -1078,7 +1190,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 }
 
 function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showToast, onPrint }) {
-  const STATUS_OPTIONS = ['Menunggu Pembayaran', 'Pembayaran Diterima', 'Diproses', 'Selesai', 'Dibatalkan'];
+  const STATUS_OPTIONS = ['Menunggu Konfirmasi', 'Pembayaran Diterima', 'Diproses', 'Selesai', 'Dibatalkan'];
   
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDate, setFilterDate] = useState("");
@@ -1096,6 +1208,8 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     if (!target) return;
     try {
       const updates = { status: newStatus };
+      
+      // Jika diproses ATAU langsung di-set ke selesai, potong stok!
       if (newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
@@ -1109,15 +1223,21 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             if (menuTarget) {
               const deductQty = Number(item.quantity || item.qty || 1);
               const variantName = item.variant || item.variantId;
-              const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v);
+              
+              const updatedVariants = menuTarget.variants.map(v => 
+                v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
+              );
+              
               const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
               const menuUpdates = { variants: updatedVariants };
-              if (totalQty <= 0) menuUpdates.isActive = false; 
+              if (totalQty <= 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
+              
               await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
             }
           }
         }
       } else if (newStatus === 'Dibatalkan') {
+        // Kembalikan Stok jika pesanan dibatalkan
         if (target.isStockDeducted) {
           updates.isStockDeducted = false;
           for (const item of target.items) {
@@ -1125,24 +1245,36 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             if (menuTarget) {
               const addQty = Number(item.quantity || item.qty || 1);
               const variantName = item.variant || item.variantId;
-              const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v);
+              
+              const updatedVariants = menuTarget.variants.map(v => 
+                v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
+              );
+              // Jadikan menu Aktif kembali karena stok bertambah
               await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
             }
           }
         }
+        
+        // --- KEMBALIKAN STOK PROMO & CABUT STATUS PENGGUNAAN ---
         if (target.discount && target.discount.dbId) {
           const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
           if (promoToUpdate) {
             const updatedUsedBy = (promoToUpdate.usedBy || []).filter(phone => phone !== target.customerPhone);
-            await updateDoc(getDocRef('promos', promoToUpdate.dbId), { stock: (promoToUpdate.stock || 0) + 1, usedBy: updatedUsedBy });
+            await updateDoc(getDocRef('promos', promoToUpdate.dbId), {
+              stock: (promoToUpdate.stock || 0) + 1,
+              usedBy: updatedUsedBy
+            });
           }
         }
+
+        // Tarik kembali poin jika pelanggan membatalkan pesanan
         if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = false;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
           if (member) await updateDoc(getDocRef('members', member.dbId), { points: Math.max(0, (member.points || 0) - (target.earnedPoints || 0)) });
         }
       }
+      
       await updateDoc(getDocRef('transactions', target.dbId), updates);
       showToast(`Status diubah ke ${newStatus}`);
     } catch(e) { showToast("Gagal update status", "error"); }
@@ -1152,27 +1284,35 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     let result = orders.filter(o => {
       const query = searchQuery.toLowerCase();
       const matchSearch = (o.customer && o.customer.toLowerCase().includes(query)) || (o.id && o.id.toLowerCase().includes(query));
+      
       const matchStatus = filterStatus === 'Semua' || o.status === filterStatus;
+
       let matchDate = true;
       if (filterDate) {
         const [y, m, d] = filterDate.split('-');
         const idFormat1 = `${d}/${m}/${y}`;
         const idFormat2 = `${parseInt(d)}/${parseInt(m)}/${y}`;
+        
         matchDate = o.filterDateKey === filterDate || (o.date && (o.date.includes(idFormat1) || o.date.includes(idFormat2)));
       }
+
       return matchSearch && matchStatus && matchDate;
     });
 
     return [...result].sort((a, b) => {
       const timeA = Number(a.timestamp) || 0;
       const timeB = Number(b.timestamp) || 0;
-      return sortOrder === "Terbaru" ? timeB - timeA : timeA - timeB;
+      if (sortOrder === "Terbaru") {
+        return timeB - timeA;
+      } else {
+        return timeA - timeB;
+      }
     });
   }, [orders, searchQuery, filterDate, filterStatus, sortOrder]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
-      <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 shrink-0">
+      <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 sticky top-0">
         <h2 className="text-2xl font-bold mb-4">Manajemen Pesanan</h2>
         <div className="flex flex-col md:flex-row gap-3">
           <div className="relative flex-1">
@@ -1199,20 +1339,23 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
             <p className="text-center text-slate-500 mt-10">Tidak ada pesanan yang sesuai filter.</p>
           ) : (
             filteredOrders.map(order => (
-              <div key={order.dbId} className={`p-5 rounded-2xl shadow-sm border flex flex-col gap-4 relative overflow-hidden transition-all duration-300 ${order.status === 'Menunggu Pembayaran' ? 'border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.3)] bg-blue-50/50' : 'bg-white border-slate-100'}`}>
-                {order.status === 'Menunggu Pembayaran' && <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500 animate-pulse" />}
-                
+              <div key={order.dbId} className={`p-5 rounded-2xl shadow-sm border flex flex-col gap-4 relative overflow-hidden transition-all duration-300 ${order.status === 'Menunggu Konfirmasi' ? 'border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.3)] bg-blue-50/50' : 'bg-white border-slate-100'}`}>
+                {order.status === 'Menunggu Konfirmasi' && (
+                  <div className="absolute top-0 left-0 w-1.5 h-full bg-blue-500 animate-pulse" />
+                )}
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
                   <div>
                     <p className="font-bold text-lg">{order.id} <span className="text-slate-400 text-sm ml-2">{order.time} {order.date && `• ${order.date.split(',')[0]}`}</span></p>
                     <p className="text-sm font-semibold text-red-600">{order.customer}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 md:gap-3">
-                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
+                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
                       {expandedOrders[order.dbId] ? <ChevronLeft className="rotate-90" size={18}/> : <ChevronLeft className="-rotate-90" size={18}/>}
                       {expandedOrders[order.dbId] ? 'Tutup' : 'Buka Pesanan'}
                     </button>
-                    <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm"><Printer size={18}/> Cetak</button>
+                    <button onClick={() => onPrint(order)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm">
+                      <Printer size={18}/> Cetak
+                    </button>
                     <select value={order.status} onChange={(e) => handleStatusChange(order.dbId, e.target.value)} className="p-2 border rounded-xl bg-slate-50 font-bold text-sm">
                       {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
                     </select>
@@ -1238,9 +1381,20 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
                     </div>
                     
                     <div className="flex flex-col gap-1 items-end pt-3 border-t border-dashed border-slate-200">
-                      <div className="flex justify-between w-56 text-sm text-slate-500"><span>Subtotal:</span><span>{formatRp(order.originalTotal || order.total + (order.discount?.value || 0))}</span></div>
-                      {order.discount && order.discount.value > 0 && <div className="flex justify-between w-56 text-sm text-green-600"><span>Diskon Promo ({order.discount.code}):</span><span>-{formatRp(order.discount.value)}</span></div>}
-                      <div className="flex justify-between w-56 text-base font-bold text-slate-800 mt-2 pt-2 border-t border-slate-200"><span>Total Akhir:</span><span className="text-red-600">{formatRp(order.total)}</span></div>
+                      <div className="flex justify-between w-56 text-sm text-slate-500">
+                        <span>Subtotal:</span>
+                        <span>{formatRp(order.originalTotal || order.total + (order.discount?.value || 0))}</span>
+                      </div>
+                      {order.discount && order.discount.value > 0 && (
+                        <div className="flex justify-between w-56 text-sm text-green-600">
+                          <span>Diskon Promo ({order.discount.code}):</span>
+                          <span>-{formatRp(order.discount.value)}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between w-56 text-base font-bold text-slate-800 mt-2 pt-2 border-t border-slate-200">
+                        <span>Total Akhir:</span>
+                        <span className="text-red-600">{formatRp(order.total)}</span>
+                      </div>
                     </div>
                   </div>
                 )}
