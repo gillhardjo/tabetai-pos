@@ -511,7 +511,13 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
 }
 
 function MemberHome({ user, onNavigate, onLogout, promos, formatRp, onClaimPromo }) {
-  const activePromos = promos?.filter(p => p.isActive !== false) || [];
+  const activePromos = promos?.filter(p => {
+    if (p.isActive === false) return false;
+    if (p.eligibleUsers && !p.eligibleUsers.includes('all') && p.eligibleUsers.length > 0) {
+      if (!user || !p.eligibleUsers.includes(user.phone)) return false;
+    }
+    return true;
+  }) || [];
 
   return (
     <div className="flex-1 overflow-y-auto px-6 mt-6 pb-24 space-y-6">
@@ -522,7 +528,6 @@ function MemberHome({ user, onNavigate, onLogout, promos, formatRp, onClaimPromo
         {activePromos.length > 0 ? (
           <div className="space-y-3">
             {activePromos.map((promo) => {
-              // Logika pengecekan ketersediaan voucher untuk user ini
               const isOutOfStock = promo.stock !== undefined && promo.stock <= 0;
               const isUsed = promo.usedBy && promo.usedBy.includes(user?.phone);
               const isUnavailable = isOutOfStock || isUsed;
@@ -581,7 +586,9 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
     if (defaultPromoCode) {
       const valid = promos.find(p => p.code === defaultPromoCode.toUpperCase() && p.isActive !== false);
       if (valid) {
-        if (valid.stock !== undefined && valid.stock <= 0) {
+        if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) {
+           showToast('Voucher eksklusif ini tidak berlaku untuk akun Anda', 'error');
+        } else if (valid.stock !== undefined && valid.stock <= 0) {
            showToast('Kuota promo sudah habis', 'error');
         } else if (valid.usedBy && valid.usedBy.includes(userPhone)) {
            showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
@@ -603,6 +610,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
   const applyPromo = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
     if (!valid) return showToast('Kode promo tidak valid', 'error');
+    if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) return showToast('Voucher eksklusif: Tidak berlaku untuk akun Anda', 'error');
     if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
     if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
     
@@ -1113,30 +1121,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
         {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
-        {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
-
-        {checkoutModal && (
-          <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
-            <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden">
-              <div className="p-5 border-b border-slate-100 flex justify-between bg-slate-50"><h3 className="font-black text-xl">Pembayaran</h3><button onClick={()=>setCheckoutModal(false)}><X size={20}/></button></div>
-              <div className="p-6 text-center"><p className="text-sm text-slate-500 mb-1">Total</p><p className="text-4xl font-black text-red-600 mb-6">{formatRp(calculateTotal())}</p>
-                <div className="grid grid-cols-2 gap-3 mb-6">
-                  <button onClick={() => setPaymentMethod('Cash')} className={`py-4 rounded-2xl font-bold border-2 flex flex-col items-center gap-2 ${paymentMethod==='Cash'?'border-red-500 bg-red-50 text-red-700':'border-slate-200 text-slate-500'}`}><Banknote size={28} /> Tunai</button>
-                  <button onClick={() => setPaymentMethod('QRIS')} className={`py-4 rounded-2xl font-bold border-2 flex flex-col items-center gap-2 ${paymentMethod==='QRIS'?'border-red-500 bg-red-50 text-red-700':'border-slate-200 text-slate-500'}`}><QrCode size={28} /> QRIS</button>
-                </div>
-                {paymentMethod === 'Cash' && (
-                  <input type="text" value={cashAmount} onChange={(e) => { const v=e.target.value.replace(/\D/g,''); setCashAmount(v?parseInt(v).toLocaleString('id-ID'):''); }} className="w-full p-4 bg-slate-50 border-2 rounded-2xl font-bold text-xl text-center mb-4" placeholder="Nominal Uang" />
-                )}
-                {paymentMethod === 'QRIS' && (
-                  <div className="mb-6 flex justify-center">
-                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-48 relative"><img src={qrisImageUrl} alt="QRIS" className="w-full object-contain" /></div>
-                  </div>
-                )}
-                <button onClick={handleCheckout} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black text-lg">Proses</button>
-              </div>
-            </div>
-          </div>
-        )}
+        {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} members={members} db={db} formatRp={formatRp} showToast={showToast} />}
 
         {/* MODAL OPEN BILL DENGAN MEMBER SELECT */}
         {showSaveBillModal && (
@@ -1349,7 +1334,7 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
                     <p className="text-sm font-semibold text-red-600">{order.customer}</p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2 md:gap-3">
-                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
+                    <button onClick={() => toggleOrderDetails(order.dbId)} className="p-2 bg-slate-100 text-slate-600 hover:bg-slate-200 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
                       {expandedOrders[order.dbId] ? <ChevronLeft className="rotate-90" size={18}/> : <ChevronLeft className="-rotate-90" size={18}/>}
                       {expandedOrders[order.dbId] ? 'Tutup' : 'Buka Pesanan'}
                     </button>
@@ -1537,50 +1522,176 @@ function AdminMemberManager({ members, db, showToast }) {
   );
 }
 
-function AdminPromoManager({ promos, menus, db, formatRp, showToast }) {
+function AdminPromoManager({ promos, menus, members, db, formatRp, showToast }) {
   const [form, setForm] = useState(null);
-  const handleMenuToggle = (menuId) => { let current = form.applicableMenus || ['all']; if (current.includes('all')) current = []; if (current.includes(menuId)) { current = current.filter(id => id !== menuId); if (current.length === 0) current = ['all']; } else { current = [...current, menuId]; } setForm({ ...form, applicableMenus: current }); };
+  
+  const handleMenuToggle = (menuId) => { 
+    let current = form.applicableMenus || ['all']; 
+    if (current.includes('all')) current = []; 
+    if (current.includes(menuId)) { 
+      current = current.filter(id => id !== menuId); 
+      if (current.length === 0) current = ['all']; 
+    } else { 
+      current = [...current, menuId]; 
+    } 
+    setForm({ ...form, applicableMenus: current }); 
+  };
+
+  const handleUserToggle = (userPhone) => { 
+    let current = form.eligibleUsers || ['all']; 
+    if (current.includes('all')) current = []; 
+    if (current.includes(userPhone)) { 
+      current = current.filter(phone => phone !== userPhone); 
+      if (current.length === 0) current = ['all']; 
+    } else { 
+      current = [...current, userPhone]; 
+    } 
+    setForm({ ...form, eligibleUsers: current }); 
+  };
+
   const isAllMenus = !form?.applicableMenus || form?.applicableMenus.includes('all') || form?.applicableMenus.length === 0;
+  const isAllUsers = !form?.eligibleUsers || form?.eligibleUsers.includes('all') || form?.eligibleUsers.length === 0;
+
   const sortedMenus = useMemo(() => [...menus].sort((a, b) => a.name.localeCompare(b.name)), [menus]);
 
   const handleSave = async (e) => { 
     e.preventDefault(); 
     try { 
       const data = { ...form, value: Number(form.value), stock: Number(form.stock), maxDiscount: Number(form.maxDiscount) || 0, minQty: Number(form.minQty) || 0, minNonPromoQty: Number(form.minNonPromoQty) || 0 };
-      if (!data.usedBy) data.usedBy = []; if (!data.applicableMenus) data.applicableMenus = ['all'];
-      if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); else await addDoc(getColRef('promos'), data); 
+      if (!data.usedBy) data.usedBy = []; 
+      if (!data.applicableMenus) data.applicableMenus = ['all'];
+      if (!data.eligibleUsers) data.eligibleUsers = ['all'];
+      
+      if(form.dbId) await updateDoc(getDocRef('promos', form.dbId), data); 
+      else await addDoc(getColRef('promos'), data); 
+      
       setForm(null); showToast("Promo disimpan"); 
     } catch(e){ showToast("Gagal menyimpan promo", "error"); } 
   };
 
   if(form) return (
-    <div className="flex-1 p-6 bg-white overflow-y-auto"><div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Promo</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
+    <div className="flex-1 p-6 bg-white overflow-y-auto">
+      <div className="flex justify-between mb-6">
+        <h2 className="text-xl font-bold">Edit Promo</h2>
+        <button onClick={()=>setForm(null)} className="p-2 hover:bg-slate-100 rounded-full"><X size={24}/></button>
+      </div>
       <form onSubmit={handleSave} className="max-w-md space-y-4">
         <input required placeholder="KODE (Cth: PROMO50)" value={form.code} onChange={e=>setForm({...form, code:e.target.value.toUpperCase()})} className="w-full p-3 border rounded-xl uppercase"/>
         <select value={form.type} onChange={e=>setForm({...form, type:e.target.value})} className="w-full p-3 border rounded-xl"><option value="percent">Persentase (%)</option><option value="nominal">Nominal (Rp)</option></select>
         <input required type="number" placeholder="Nilai Diskon" value={form.value} onChange={e=>setForm({...form, value:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
-        {form.type === 'percent' && (<div><label className="block text-xs font-bold text-slate-500 mb-1">Maksimal Potongan (Rp)</label><input type="number" placeholder="Isi 0 jika tanpa batas" value={form.maxDiscount || ''} onChange={e=>setForm({...form, maxDiscount:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>)}
-        <div><label className="block text-xs font-bold text-slate-500 mb-1">Minimal Pembelian (Qty Item Promo)</label><input type="number" placeholder="Isi 0 jika tanpa batas" value={form.minQty || ''} onChange={e=>setForm({...form, minQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>
-        <div><label className="block text-xs font-bold text-slate-500 mb-1">Stok / Kuota Penggunaan Promo</label><input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>
+        
+        {form.type === 'percent' && (
+          <div>
+            <label className="block text-xs font-bold text-slate-500 mb-1">Maksimal Potongan (Rp)</label>
+            <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.maxDiscount || ''} onChange={e=>setForm({...form, maxDiscount:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+          </div>
+        )}
+        
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Minimal Pembelian (Qty Item Promo)</label>
+          <input type="number" placeholder="Isi 0 jika tanpa batas" value={form.minQty || ''} onChange={e=>setForm({...form, minQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        </div>
+        
+        <div>
+          <label className="block text-xs font-bold text-slate-500 mb-1">Stok / Kuota Penggunaan Promo</label>
+          <input required type="number" placeholder="Stok / Kuota Promo" value={form.stock !== undefined ? form.stock : 100} onChange={e=>setForm({...form, stock:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+        </div>
         
         {/* FITUR TRIGGER PEMBELIAN NON-PROMO */}
-        <div className="border-t pt-3 mt-2"><div className="flex items-center gap-2 mb-2"><input type="checkbox" checked={form.requireNonPromoItem||false} onChange={e=>setForm({...form, requireNonPromoItem: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-sm">Syarat Pembelian Menu Lain</label></div>{form.requireNonPromoItem && (<div><label className="block text-xs font-bold text-slate-500 mb-1">Jumlah Minimal Menu Lain Yang Harus Dibeli</label><input type="number" value={form.minNonPromoQty || 1} min="1" onChange={e=>setForm({...form, minNonPromoQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/></div>)}</div>
+        <div className="border-t pt-3 mt-2">
+          <div className="flex items-center gap-2 mb-2">
+            <input type="checkbox" checked={form.requireNonPromoItem||false} onChange={e=>setForm({...form, requireNonPromoItem: e.target.checked})} className="w-5 h-5 accent-red-600"/>
+            <label className="font-bold text-sm text-slate-700">Syarat Pembelian Menu Lain</label>
+          </div>
+          {form.requireNonPromoItem && (
+            <div>
+              <label className="block text-xs font-bold text-slate-500 mb-1">Jumlah Minimal Menu Lain Yang Harus Dibeli</label>
+              <input type="number" value={form.minNonPromoQty || 1} min="1" onChange={e=>setForm({...form, minNonPromoQty:Number(e.target.value)})} className="w-full p-3 border rounded-xl"/>
+            </div>
+          )}
+        </div>
 
-        <div className="border-t border-slate-200 pt-4 mt-2"><label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Menu:</label><div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50"><label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200"><input type="checkbox" checked={isAllMenus} onChange={() => setForm({...form, applicableMenus: ['all']})} className="w-5 h-5 accent-red-600"/><span className="font-bold text-slate-800 text-sm">Semua Menu</span></label>{sortedMenus.map(m => (<label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1"><input type="checkbox" checked={!isAllMenus && form.applicableMenus?.includes(m.dbId)} onChange={() => handleMenuToggle(m.dbId)} className="w-5 h-5 accent-red-600"/><span className="text-sm font-medium text-slate-700">{m.name}</span></label>))}</div></div>
-        <div className="flex gap-2 items-center pt-2"><input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-slate-700">Promo Aktif</label></div><button className="w-full bg-slate-900 text-white font-bold py-4 rounded-xl mt-4">Simpan</button>
+        {/* TARGET MENU KHUSUS */}
+        <div className="border-t border-slate-200 pt-4 mt-2">
+          <label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Menu:</label>
+          <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50">
+            <label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200">
+              <input type="checkbox" checked={isAllMenus} onChange={() => setForm({...form, applicableMenus: ['all']})} className="w-5 h-5 accent-red-600"/>
+              <span className="font-bold text-slate-800 text-sm">Semua Menu</span>
+            </label>
+            {sortedMenus.map(m => (
+              <label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1">
+                <input type="checkbox" checked={!isAllMenus && form.applicableMenus?.includes(m.dbId)} onChange={() => handleMenuToggle(m.dbId)} className="w-5 h-5 accent-red-600"/>
+                <span className="text-sm font-medium text-slate-700">{m.name}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {/* TARGET PELANGGAN KHUSUS (DEDICATED VOUCHER) */}
+        <div className="border-t border-slate-200 pt-4 mt-2">
+          <label className="block text-sm font-bold text-slate-700 mb-2">Berlaku Untuk Pelanggan (Dedicated Voucher):</label>
+          <div className="space-y-2 max-h-48 overflow-y-auto p-3 border border-slate-200 rounded-xl bg-slate-50">
+            <label className="flex items-center gap-3 cursor-pointer pb-2 border-b border-slate-200">
+              <input type="checkbox" checked={isAllUsers} onChange={() => setForm({...form, eligibleUsers: ['all']})} className="w-5 h-5 accent-red-600"/>
+              <span className="font-bold text-slate-800 text-sm">Semua Pelanggan (Publik)</span>
+            </label>
+            {members.map(m => (
+              <label key={m.dbId} className="flex items-center gap-3 cursor-pointer py-1">
+                <input type="checkbox" checked={!isAllUsers && form.eligibleUsers?.includes(m.phone)} onChange={() => handleUserToggle(m.phone)} className="w-5 h-5 accent-red-600"/>
+                <span className="text-sm font-medium text-slate-700">{m.name} <span className="text-slate-400 text-xs">({m.phone})</span></span>
+              </label>
+            ))}
+            {members.length === 0 && <p className="text-xs text-slate-400 p-2 text-center">Belum ada pelanggan terdaftar.</p>}
+          </div>
+        </div>
+
+        <div className="flex gap-2 items-center pt-2">
+          <input type="checkbox" checked={form.isActive} onChange={e=>setForm({...form, isActive:e.target.checked})} className="w-5 h-5 accent-red-600"/>
+          <label className="font-bold text-slate-700">Promo Aktif</label>
+        </div>
+        
+        <button className="w-full bg-slate-900 hover:bg-slate-800 transition-colors text-white font-bold py-4 rounded-xl mt-4 shadow-md">Simpan</button>
       </form>
     </div>
   );
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><div className="flex justify-between items-center mb-6"><h2 className="text-2xl font-bold">Promo & Diskon</h2><button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: [], applicableMenus: ['all'], minQty: 0, requireNonPromoItem: false, minNonPromoQty: 1})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold">Tambah</button></div>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Promo & Diskon</h2>
+        <button onClick={()=>setForm({code:'', type:'percent', value:0, stock:100, isActive:true, usedBy: [], applicableMenus: ['all'], eligibleUsers: ['all'], minQty: 0, requireNonPromoItem: false, minNonPromoQty: 1})} className="bg-slate-900 hover:bg-slate-800 transition-colors text-white px-4 py-2 rounded-xl font-bold shadow-md">Tambah</button>
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {promos.map(p => (
-          <div key={p.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
-            <div><h3 className="font-black text-xl">{p.code}</h3><p className="text-slate-500 font-medium text-sm mt-0.5">{p.type==='percent'?`${p.value}%`:formatRp(p.value)} {p.maxDiscount > 0 ? ` (Maks ${formatRp(p.maxDiscount)})` : ''}</p><p className="text-xs text-slate-400 mt-1">Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} • Min Qty: {p.minQty || 0} {p.isActive?'(Aktif)':'(Mati)'}</p></div>
-            <div className="flex gap-2"><button onClick={()=>setForm(p)} className="p-2 bg-blue-50 text-blue-600 rounded-lg"><Edit2 size={18}/></button><button onClick={()=>deleteDoc(getDocRef('promos', p.dbId))} className="p-2 bg-red-50 text-red-600 rounded-lg"><Trash2 size={18}/></button></div>
-          </div>
-        ))}
+        {promos.map(p => {
+          const isDedicated = p.eligibleUsers && !p.eligibleUsers.includes('all') && p.eligibleUsers.length > 0;
+          return (
+            <div key={p.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm relative overflow-hidden">
+              {isDedicated && (
+                <div className="absolute top-0 right-0 bg-purple-100 text-purple-700 text-[10px] font-bold px-3 py-1 rounded-bl-xl shadow-sm">
+                  Dedicated Voucher
+                </div>
+              )}
+              <div>
+                <h3 className="font-black text-xl text-slate-800">{p.code}</h3>
+                <p className="text-slate-500 font-medium text-sm mt-0.5">
+                  {p.type==='percent'?`${p.value}%`:formatRp(p.value)} {p.maxDiscount > 0 ? ` (Maks ${formatRp(p.maxDiscount)})` : ''}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  Sisa Kuota: {p.stock !== undefined ? p.stock : '∞'} • Min Qty: {p.minQty || 0}
+                  <span className={`ml-2 font-bold ${p.isActive ? 'text-green-500' : 'text-slate-400'}`}>
+                    {p.isActive ? '(Aktif)' : '(Mati)'}
+                  </span>
+                </p>
+              </div>
+              <div className="flex gap-2 relative z-10">
+                <button onClick={()=>setForm(p)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"><Edit2 size={18}/></button>
+                <button onClick={() => { if(window.confirm('Hapus promo ini?')) deleteDoc(getDocRef('promos', p.dbId)) }} className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={18}/></button>
+              </div>
+            </div>
+          )
+        })}
+        {promos.length === 0 && <p className="text-slate-500 text-center col-span-2 py-10">Belum ada promo yang dibuat.</p>}
       </div>
     </div>
   );
