@@ -304,7 +304,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
     const varTarget = item.variants?.find(v => v.name === variantName);
     
     setCart(prev => {
-      const existingIdx = prev.findIndex(i => i.id === item.id && i.variant === variantName && i.note === note);
+      const existingIdx = prev.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
       let currentCartQty = 0;
       if (existingIdx > -1) currentCartQty = prev[existingIdx].quantity;
 
@@ -315,7 +315,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
 
       if (existingIdx > -1) {
         const newCart = [...prev];
-        newCart[existingIdx].quantity += quantity;
+        newCart[existingIdx] = { ...newCart[existingIdx], quantity: newCart[existingIdx].quantity + quantity };
         showToast("Berhasil ditambah ke keranjang");
         return newCart;
       }
@@ -875,28 +875,33 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     return matchSearch && item.isActive !== false && isMenuAvailableByTime(item);
   }).sort((a, b) => (a.orderPriority || 99) - (b.orderPriority || 99));
 
+  // PERBAIKAN LOGIKA KERANJANG ADMIN MENGGUNAKAN PREVCART
   const addToCartFinal = (item, variantName, quantity = 1, note = '') => {
     const itemPrice = item.price; 
     const variantId = variantName || 'default';
 
-    const existingIdx = cart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
-    const varTarget = item.variants?.find(v => v.name === variantId);
-    let currentCartQty = 0;
-    
-    if (existingIdx > -1) {
-      currentCartQty = cart[existingIdx].qty;
-    }
+    setCart(prevCart => {
+      const existingIdx = prevCart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
+      const varTarget = item.variants?.find(v => v.name === variantId);
+      let currentCartQty = 0;
+      
+      if (existingIdx > -1) {
+        currentCartQty = prevCart[existingIdx].qty;
+      }
 
-    if (varTarget && currentCartQty + quantity > varTarget.qty) {
-       showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
-       return;
-    }
+      if (varTarget && currentCartQty + quantity > varTarget.qty) {
+         showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+         return prevCart;
+      }
 
-    if (existingIdx > -1) {
-      const newCart = [...cart]; newCart[existingIdx].qty += quantity; setCart(newCart);
-    } else {
-      setCart([...cart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note }]);
-    }
+      if (existingIdx > -1) {
+        const newCart = [...prevCart];
+        newCart[existingIdx] = { ...newCart[existingIdx], qty: newCart[existingIdx].qty + quantity };
+        return newCart;
+      } else {
+        return [...prevCart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note, cartId: Date.now() }];
+      }
+    });
     setVariantModal(false);
   };
 
