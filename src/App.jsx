@@ -25,7 +25,6 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-// Fungsi Helper Path Firebase
 const getColRef = (colName) => {
   let name = colName;
   if (name === 'menu') name = 'menus';
@@ -205,7 +204,6 @@ export default function TabetaiSuperApp() {
     setCurrentUser(null);
     localStorage.removeItem('tbt_role');
     localStorage.removeItem('tbt_user');
-    // Membiarkan localstorage cart member agar tersimpan permanen
   };
 
   const activeUser = currentUser ? members.find(m => m.phone === currentUser.phone && m.name.toLowerCase() === currentUser.name.toLowerCase()) || currentUser : null;
@@ -303,17 +301,45 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const getCartCount = () => cart.reduce((sum, item) => sum + item.quantity, 0);
 
   const addToCart = (item, variantName, quantity, note) => {
+    const varTarget = item.variants?.find(v => v.name === variantName);
+    
     setCart(prev => {
-      const existing = prev.findIndex(i => i.id === item.id && i.variant === variantName && i.note === note);
-      if (existing > -1) {
+      const existingIdx = prev.findIndex(i => i.id === item.id && i.variant === variantName && i.note === note);
+      let currentCartQty = 0;
+      if (existingIdx > -1) currentCartQty = prev[existingIdx].quantity;
+
+      if (varTarget && currentCartQty + quantity > varTarget.qty) {
+         showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+         return prev; 
+      }
+
+      if (existingIdx > -1) {
         const newCart = [...prev];
-        newCart[existing].quantity += quantity;
+        newCart[existingIdx].quantity += quantity;
+        showToast("Berhasil ditambah ke keranjang");
         return newCart;
       }
+      showToast("Berhasil ditambah ke keranjang");
       return [...prev, { ...item, variant: variantName, quantity, note, cartId: Date.now() }];
     });
     setSelectedItem(null);
-    showToast("Berhasil ditambah ke keranjang");
+  };
+
+  const updateQty = (id, d) => {
+    setCart(prevCart => prevCart.map(i => {
+      if (i.cartId === id) {
+        if (d > 0) {
+          const menuTarget = menus.find(m => m.dbId === (i.dbId || i.id));
+          const varTarget = menuTarget?.variants?.find(v => v.name === i.variant);
+          if (varTarget && i.quantity + d > varTarget.qty) {
+            showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
+            return i; 
+          }
+        }
+        return { ...i, quantity: Math.max(0, i.quantity + d) };
+      }
+      return i;
+    }).filter(i => i.quantity > 0));
   };
 
   const placeOrder = async (finalTotal, discountObj) => {
@@ -449,7 +475,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
             </button>
           </div>
           
-          <MemberHome user={user} onNavigate={setView} onLogout={onLogout} promos={promos} formatRp={formatRp} onClaimPromo={(code) => { setClaimedPromoCode(code); showToast(`Voucher ${code} diklaim! Silakan pilih menu.`); }} />
+          <MemberHome user={user} onNavigate={setView} promos={promos} formatRp={formatRp} onClaimPromo={(code) => { setClaimedPromoCode(code); showToast(`Voucher ${code} diklaim! Silakan pilih menu.`); }} />
           
           <a href={`https://wa.me/${ADMIN_WA_NUMBER}?text=Halo%20Admin%20Tabetai,%20saya%20${user.name}%20butuh%20bantuan.`} target="_blank" rel="noreferrer" className="absolute bottom-6 right-6 bg-green-500 text-white p-4 rounded-full shadow-lg hover:bg-green-600 transition-transform active:scale-95 z-50">
             <MessageCircle size={28} />
@@ -492,7 +518,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
       )}
 
       {view === 'checkout' && (
-        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={(id, d) => setCart(c => c.map(i => i.cartId === id ? {...i, quantity: Math.max(0, i.quantity + d)} : i).filter(i => i.quantity > 0))} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} userPhone={user.phone} isPlacingOrder={isPlacingOrder} defaultPromoCode={claimedPromoCode} clearClaimedPromo={() => setClaimedPromoCode('')} />
+        <MemberCheckout cart={cart} onBack={() => setView('menu')} updateQty={updateQty} subtotal={getCartTotal()} onPay={placeOrder} promos={promos} formatRp={formatRp} showToast={showToast} userPhone={user.phone} isPlacingOrder={isPlacingOrder} defaultPromoCode={claimedPromoCode} clearClaimedPromo={() => setClaimedPromoCode('')} />
       )}
 
       {view === 'payment' && myOrders[0] && (
@@ -510,14 +536,8 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   );
 }
 
-function MemberHome({ user, onNavigate, onLogout, promos, formatRp, onClaimPromo }) {
-  const activePromos = promos?.filter(p => {
-    if (p.isActive === false) return false;
-    if (p.eligibleUsers && !p.eligibleUsers.includes('all') && p.eligibleUsers.length > 0) {
-      if (!user || !p.eligibleUsers.includes(user.phone)) return false;
-    }
-    return true;
-  }) || [];
+function MemberHome({ user, onNavigate, promos, formatRp, onClaimPromo }) {
+  const activePromos = promos?.filter(p => p.isActive !== false) || [];
 
   return (
     <div className="flex-1 overflow-y-auto px-6 mt-6 pb-24 space-y-6">
@@ -586,9 +606,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
     if (defaultPromoCode) {
       const valid = promos.find(p => p.code === defaultPromoCode.toUpperCase() && p.isActive !== false);
       if (valid) {
-        if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) {
-           showToast('Voucher eksklusif ini tidak berlaku untuk akun Anda', 'error');
-        } else if (valid.stock !== undefined && valid.stock <= 0) {
+        if (valid.stock !== undefined && valid.stock <= 0) {
            showToast('Kuota promo sudah habis', 'error');
         } else if (valid.usedBy && valid.usedBy.includes(userPhone)) {
            showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
@@ -610,7 +628,6 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
   const applyPromo = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
     if (!valid) return showToast('Kode promo tidak valid', 'error');
-    if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) return showToast('Voucher eksklusif: Tidak berlaku untuk akun Anda', 'error');
     if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
     if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
     
@@ -744,10 +761,19 @@ function MemberStatus({ orders, onBack, userPhone, formatRp, onCancelOrder }) {
 }
 
 function VariantModal({ item, onClose, onAdd, formatRp }) {
-  const availableVariants = item.variants?.filter(v => v.qty > 0) || [];
-  const [selectedVariant, setSelectedVariant] = useState(availableVariants[0]?.name || (item.variants?.[0]?.name) || '');
+  const availableVariants = item.variants || [];
+  const [selectedVariant, setSelectedVariant] = useState(availableVariants[0]?.name || '');
   const [qty, setQty] = useState(1);
   const [note, setNote] = useState('');
+
+  const currentVarObj = availableVariants.find(v => v.name === selectedVariant);
+  const maxQty = currentVarObj ? currentVarObj.qty : 0;
+  const isOutOfStock = maxQty <= 0;
+  const isOverStock = qty > maxQty;
+
+  const handleIncreaseQty = () => {
+    if (qty < maxQty) setQty(qty + 1);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center items-end bg-slate-900/60 backdrop-blur-sm">
@@ -767,9 +793,9 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
         <div className="flex-1 overflow-y-auto p-6 bg-white z-10">
           <h3 className="font-bold text-slate-800 mb-3 text-sm">Pilih Varian</h3>
           <div className="space-y-2 mb-6">
-            {item.variants?.map(v => (
-              <label key={v.name} className={`flex items-center justify-between p-4 border rounded-xl ${selectedVariant === v.name ? 'border-red-500 bg-red-50/50' : 'border-slate-200'}`}>
-                <span className="font-medium text-slate-700">{v.name} {v.qty === 0 && '(Habis)'}</span>
+            {availableVariants.map(v => (
+              <label key={v.name} className={`flex items-center justify-between p-4 border rounded-xl ${selectedVariant === v.name ? 'border-red-500 bg-red-50/50' : 'border-slate-200'} ${v.qty <= 0 ? 'opacity-50' : ''}`}>
+                <span className="font-medium text-slate-700">{v.name} {v.qty <= 0 && '(Habis)'}</span>
                 {v.qty > 0 && <input type="radio" checked={selectedVariant === v.name} onChange={() => setSelectedVariant(v.name)} className="w-5 h-5 accent-red-500" />}
               </label>
             ))}
@@ -781,9 +807,15 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
           <div className="flex items-center gap-4 bg-slate-100 p-2 rounded-xl">
             <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-10 h-10 bg-white rounded-lg shadow-sm"><Minus size={18} className="mx-auto"/></button>
             <span className="font-bold text-lg w-4 text-center">{qty}</span>
-            <button onClick={() => setQty(qty + 1)} className="w-10 h-10 bg-white rounded-lg shadow-sm text-red-600"><Plus size={18} className="mx-auto"/></button>
+            <button onClick={handleIncreaseQty} className={`w-10 h-10 bg-white rounded-lg shadow-sm ${qty >= maxQty ? 'text-slate-300 cursor-not-allowed' : 'text-red-600'}`}><Plus size={18} className="mx-auto"/></button>
           </div>
-          <button onClick={() => onAdd(item, selectedVariant, qty, note)} disabled={!selectedVariant} className="flex-1 bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 disabled:opacity-50">Tambah - {formatRp(item.price * qty)}</button>
+          <button 
+            onClick={() => onAdd(item, selectedVariant, qty, note)} 
+            disabled={!selectedVariant || isOutOfStock || isOverStock} 
+            className={`flex-1 text-white font-bold py-4 rounded-xl disabled:opacity-50 transition-colors ${isOutOfStock || isOverStock ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 shadow-md'}`}
+          >
+            {isOutOfStock ? "Stok Habis" : isOverStock ? `Stok sisa ${maxQty}` : `Tambah - ${formatRp(item.price * qty)}`}
+          </button>
         </div>
       </div>
     </div>
@@ -847,9 +879,21 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     const itemPrice = item.price; 
     const variantId = variantName || 'default';
 
-    const existing = cart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
-    if (existing > -1) {
-      const newCart = [...cart]; newCart[existing].qty += quantity; setCart(newCart);
+    const existingIdx = cart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
+    const varTarget = item.variants?.find(v => v.name === variantId);
+    let currentCartQty = 0;
+    
+    if (existingIdx > -1) {
+      currentCartQty = cart[existingIdx].qty;
+    }
+
+    if (varTarget && currentCartQty + quantity > varTarget.qty) {
+       showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+       return;
+    }
+
+    if (existingIdx > -1) {
+      const newCart = [...cart]; newCart[existingIdx].qty += quantity; setCart(newCart);
     } else {
       setCart([...cart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note }]);
     }
@@ -1098,7 +1142,15 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                     <div className="flex items-center gap-2 bg-slate-100 rounded-lg p-1">
                       <button onClick={() => setCart(c => c.map(i=> i.originalId===item.originalId && i.variantId===item.variantId && i.note===item.note ? {...i, qty: i.qty-1} : i).filter(i=>i.qty>0))} className="w-7 h-7 bg-white rounded flex items-center justify-center shadow-sm"><Minus size={14}/></button>
                       <span className="w-4 text-center font-bold text-sm">{item.qty}</span>
-                      <button onClick={() => setCart(c => c.map(i=> i.originalId===item.originalId && i.variantId===item.variantId && i.note===item.note ? {...i, qty: i.qty+1} : i))} className="w-7 h-7 bg-white rounded flex items-center justify-center text-red-600 shadow-sm"><Plus size={14}/></button>
+                      <button onClick={() => {
+                        const menuTarget = menus.find(m => m.dbId === item.originalId);
+                        const varTarget = menuTarget?.variants?.find(v => v.name === item.variantId);
+                        if (varTarget && item.qty + 1 > varTarget.qty) {
+                          showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
+                          return;
+                        }
+                        setCart(c => c.map(i=> i.originalId===item.originalId && i.variantId===item.variantId && i.note===item.note ? {...i, qty: i.qty+1} : i));
+                      }} className="w-7 h-7 bg-white rounded flex items-center justify-center text-red-600 shadow-sm"><Plus size={14}/></button>
                     </div>
                   </div>
                 ))}
@@ -1116,12 +1168,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
             </div>
           </div>
         )}
-
-        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
-        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
-        {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
-        {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
-        {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} members={members} db={db} formatRp={formatRp} showToast={showToast} />}
 
         {/* MODAL OPEN BILL DENGAN MEMBER SELECT */}
         {showSaveBillModal && (
@@ -1166,9 +1212,12 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
-        {variantModal && (
-          <VariantModal item={variantModal} onClose={() => setVariantModal(false)} onAdd={addToCartFinal} formatRp={formatRp} />
-        )}
+        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
+        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
+        {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
+        {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
+        {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} members={members} db={db} formatRp={formatRp} showToast={showToast} />}
+
       </div>
     </div>
   );
