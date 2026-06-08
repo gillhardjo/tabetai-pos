@@ -723,7 +723,12 @@ function MemberPayment({ onCheckStatus, onBackHome, order, userPhone, formatRp }
       <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center">
         <p className="text-slate-500 text-sm mb-1">Total Tagihan</p><p className="text-3xl font-black text-slate-800 mb-8">{formatRp(order.total)}</p>
         <div className="bg-white p-4 rounded-3xl shadow-xl border border-slate-100 mb-6 w-full max-w-[260px] relative">
-          <img src={qrisImageUrl} alt="QRIS" className="w-full object-contain" />
+          <img 
+            src={qrisImageUrl} 
+            alt="QRIS" 
+            className="w-full object-contain" 
+            onError={(e) => { e.target.src = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=QRIS_BELUM_DISET'; }} 
+          />
           <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-red-600 text-white px-4 py-1 rounded-full text-xs font-bold">QRIS TABETAI</div>
         </div>
         <button onClick={() => window.open(generateInvoiceWAUrl(order, userPhone), '_blank')} className="text-blue-600 font-semibold bg-blue-50 py-3 px-6 rounded-xl text-sm mb-10 flex gap-2"><ScrollText size={16} /> Download Invoice</button>
@@ -880,7 +885,6 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     return matchSearch && item.isActive !== false && isMenuAvailableByTime(item);
   }).sort((a, b) => (a.orderPriority || 99) - (b.orderPriority || 99));
 
-  // PERBAIKAN LOGIKA KERANJANG ADMIN MENGGUNAKAN PREVCART PURE FUNCTION
   const addToCartFinal = (item, variantName, quantity = 1, note = '') => {
     const itemPrice = item.price; 
     const variantId = variantName || 'default';
@@ -1176,6 +1180,37 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                   <button onClick={() => { if (cart.length > 0) { if(activeBill) handleAutoSaveBill(); else setShowSaveBillModal(true); } }} className="px-4 py-3 bg-red-50 text-red-600 rounded-xl font-bold flex justify-center items-center"><FolderOpen size={24} /></button>
                   <button onClick={() => { if (cart.length > 0) setCheckoutModal(true); }} className="flex-1 bg-red-600 text-white rounded-xl font-bold shadow-lg shadow-red-200">Pilih Pembayaran</button>
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL CHECKOUT KASIR */}
+        {checkoutModal && (
+          <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4">
+            <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden">
+              <div className="p-5 border-b border-slate-100 flex justify-between bg-slate-50"><h3 className="font-black text-xl">Pembayaran</h3><button onClick={()=>setCheckoutModal(false)}><X size={20}/></button></div>
+              <div className="p-6 text-center"><p className="text-sm text-slate-500 mb-1">Total</p><p className="text-4xl font-black text-red-600 mb-6">{formatRp(calculateTotal())}</p>
+                <div className="grid grid-cols-2 gap-3 mb-6">
+                  <button onClick={() => setPaymentMethod('Cash')} className={`py-4 rounded-2xl font-bold border-2 flex flex-col items-center gap-2 ${paymentMethod==='Cash'?'border-red-500 bg-red-50 text-red-700':'border-slate-200 text-slate-500'}`}><Banknote size={28} /> Tunai</button>
+                  <button onClick={() => setPaymentMethod('QRIS')} className={`py-4 rounded-2xl font-bold border-2 flex flex-col items-center gap-2 ${paymentMethod==='QRIS'?'border-red-500 bg-red-50 text-red-700':'border-slate-200 text-slate-500'}`}><QrCode size={28} /> QRIS</button>
+                </div>
+                {paymentMethod === 'Cash' && (
+                  <input type="text" value={cashAmount} onChange={(e) => { const v=e.target.value.replace(/\D/g,''); setCashAmount(v?parseInt(v).toLocaleString('id-ID'):''); }} className="w-full p-4 bg-slate-50 border-2 rounded-2xl font-bold text-xl text-center mb-4" placeholder="Nominal Uang" />
+                )}
+                {paymentMethod === 'QRIS' && (
+                  <div className="mb-6 flex justify-center">
+                    <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 w-48 relative">
+                      <img 
+                        src={qrisImageUrl} 
+                        alt="QRIS" 
+                        className="w-full object-contain" 
+                        onError={(e) => { e.target.src = 'https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=QRIS_BELUM_DISET'; }} 
+                      />
+                    </div>
+                  </div>
+                )}
+                <button onClick={handleCheckout} className="w-full py-4 bg-red-600 text-white rounded-2xl font-black text-lg">Proses</button>
               </div>
             </div>
           </div>
