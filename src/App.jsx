@@ -303,39 +303,44 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const addToCart = (item, variantName, quantity, note) => {
     const varTarget = item.variants?.find(v => v.name === variantName);
     
+    // Periksa status stok terlebih dahulu SEBELUM update state keranjang (pure function fix)
+    const existingIdx = cart.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
+    let currentCartQty = 0;
+    if (existingIdx > -1) currentCartQty = cart[existingIdx].quantity;
+
+    if (varTarget && currentCartQty + quantity > varTarget.qty) {
+       showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+       return; 
+    }
+
     setCart(prev => {
-      const existingIdx = prev.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
-      let currentCartQty = 0;
-      if (existingIdx > -1) currentCartQty = prev[existingIdx].quantity;
-
-      if (varTarget && currentCartQty + quantity > varTarget.qty) {
-         showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
-         return prev; 
-      }
-
-      if (existingIdx > -1) {
+      const idx = prev.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
+      if (idx > -1) {
         const newCart = [...prev];
-        newCart[existingIdx] = { ...newCart[existingIdx], quantity: newCart[existingIdx].quantity + quantity };
-        showToast("Berhasil ditambah ke keranjang");
+        newCart[idx] = { ...newCart[idx], quantity: newCart[idx].quantity + quantity };
         return newCart;
       }
-      showToast("Berhasil ditambah ke keranjang");
       return [...prev, { ...item, variant: variantName, quantity, note, cartId: Date.now() }];
     });
     setSelectedItem(null);
+    showToast("Berhasil ditambah ke keranjang");
   };
 
   const updateQty = (id, d) => {
+    const targetItem = cart.find(i => i.cartId === id);
+    if (!targetItem) return;
+
+    if (d > 0) {
+      const menuTarget = menus.find(m => m.dbId === (targetItem.dbId || targetItem.id));
+      const varTarget = menuTarget?.variants?.find(v => v.name === targetItem.variant);
+      if (varTarget && targetItem.quantity + d > varTarget.qty) {
+        showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
+        return; 
+      }
+    }
+
     setCart(prevCart => prevCart.map(i => {
       if (i.cartId === id) {
-        if (d > 0) {
-          const menuTarget = menus.find(m => m.dbId === (i.dbId || i.id));
-          const varTarget = menuTarget?.variants?.find(v => v.name === i.variant);
-          if (varTarget && i.quantity + d > varTarget.qty) {
-            showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
-            return i; 
-          }
-        }
         return { ...i, quantity: Math.max(0, i.quantity + d) };
       }
       return i;
@@ -875,34 +880,36 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
     return matchSearch && item.isActive !== false && isMenuAvailableByTime(item);
   }).sort((a, b) => (a.orderPriority || 99) - (b.orderPriority || 99));
 
-  // PERBAIKAN LOGIKA KERANJANG ADMIN MENGGUNAKAN PREVCART
+  // PERBAIKAN LOGIKA KERANJANG ADMIN MENGGUNAKAN PREVCART PURE FUNCTION
   const addToCartFinal = (item, variantName, quantity = 1, note = '') => {
     const itemPrice = item.price; 
     const variantId = variantName || 'default';
 
+    const existingIdx = cart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
+    const varTarget = item.variants?.find(v => v.name === variantId);
+    let currentCartQty = 0;
+    
+    if (existingIdx > -1) {
+      currentCartQty = cart[existingIdx].qty;
+    }
+
+    if (varTarget && currentCartQty + quantity > varTarget.qty) {
+       showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+       return;
+    }
+
     setCart(prevCart => {
-      const existingIdx = prevCart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
-      const varTarget = item.variants?.find(v => v.name === variantId);
-      let currentCartQty = 0;
-      
-      if (existingIdx > -1) {
-        currentCartQty = prevCart[existingIdx].qty;
-      }
-
-      if (varTarget && currentCartQty + quantity > varTarget.qty) {
-         showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
-         return prevCart;
-      }
-
-      if (existingIdx > -1) {
+      const idx = prevCart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
+      if (idx > -1) {
         const newCart = [...prevCart];
-        newCart[existingIdx] = { ...newCart[existingIdx], qty: newCart[existingIdx].qty + quantity };
+        newCart[idx] = { ...newCart[idx], qty: newCart[idx].qty + quantity };
         return newCart;
       } else {
         return [...prevCart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note, cartId: Date.now() }];
       }
     });
     setVariantModal(false);
+    showToast("Berhasil ditambah ke keranjang");
   };
 
   const applyPromoCode = () => {
