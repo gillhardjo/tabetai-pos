@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   ShoppingCart, MessageCircle, ChevronLeft, Plus, Minus, X, Download, Clock, Store, 
-  User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer, Menu as MenuIcon
+  User, Phone, Users, ScrollText, Edit2, Save, Trash2, LogOut, Eye, EyeOff, Tag, Search, Filter, CheckCircle, ChefHat, FolderOpen, Database, Banknote, QrCode, Image as ImageIcon, UtensilsCrossed, Printer, Menu as MenuIcon, BarChart3, Calendar, TrendingUp, Box, Layers
 } from 'lucide-react';
 
 import { initializeApp } from 'firebase/app';
@@ -24,7 +24,6 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 
-// FIX: Menggunakan Long-Polling untuk mencegah timeout WebSocket (Cloud Firestore backend unreachable)
 const db = initializeFirestore(app, {
   experimentalForceLongPolling: true
 });
@@ -103,6 +102,25 @@ const calculatePromoDiscount = (cart, promo) => {
   return { discount: Math.floor(discAmount), error: null };
 };
 
+const getMenuHPP = (menu, variantName, menusData) => {
+  if (!menu) return 0;
+  
+  if (menu.itemType === 'composite' && menu.ingredients) {
+      return menu.ingredients.reduce((total, ing) => {
+          const ingMenu = menusData?.find(m => m.dbId === ing.menuId);
+          if (ingMenu) {
+             const ingHPP = getMenuHPP(ingMenu, 'default', menusData);
+             return total + (ingHPP * ing.qty);
+          }
+          return total;
+      }, 0);
+  }
+  
+  const targetVariant = menu.variants?.find(v => v.name === variantName);
+  if (targetVariant && targetVariant.hpp) return Number(targetVariant.hpp);
+  return Number(menu.hpp) || 0;
+};
+
 const generateInvoiceWAUrl = (order, userPhone) => {
   const itemsText = order.items.map(i => `- ${i.quantity || i.qty}x ${i.name} (${i.variant || i.variantId})${i.note ? ` [Note: ${i.note}]` : ''}: ${formatRp(i.price * (i.quantity || i.qty))}`).join('%0A');
   let discountText = '';
@@ -119,7 +137,7 @@ const generateInvoiceWAUrl = (order, userPhone) => {
 // ==========================================
 // MAIN APP COMPONENT (ROOT)
 // ==========================================
-export default function TabetaiSuperApp() {
+export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
   
@@ -307,14 +325,18 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const addToCart = (item, variantName, quantity, note) => {
     const varTarget = item.variants?.find(v => v.name === variantName);
     
-    const existingIdx = cart.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
-    let currentCartQty = 0;
-    if (existingIdx > -1) currentCartQty = cart[existingIdx].quantity;
+    if (item.itemType !== 'composite') {
+        const existingIdx = cart.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
+        let currentCartQty = 0;
+        if (existingIdx > -1) currentCartQty = cart[existingIdx].quantity;
 
-    if (varTarget && currentCartQty + quantity > varTarget.qty) {
-       showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
-       return; 
+        if (varTarget && currentCartQty + quantity > varTarget.qty) {
+           showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
+           return; 
+        }
     }
+
+    const calculatedHPP = getMenuHPP(item, variantName, menus);
 
     setCart(prev => {
       const idx = prev.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
@@ -323,7 +345,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
         newCart[idx] = { ...newCart[idx], quantity: newCart[idx].quantity + quantity };
         return newCart;
       }
-      return [...prev, { ...item, variant: variantName, quantity, note, cartId: Date.now() }];
+      return [...prev, { ...item, variant: variantName, quantity, note, hpp: calculatedHPP, cartId: Date.now() }];
     });
     setSelectedItem(null);
     showToast("Berhasil ditambah ke keranjang");
@@ -335,10 +357,12 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
 
     if (d > 0) {
       const menuTarget = menus.find(m => m.dbId === (targetItem.dbId || targetItem.id));
-      const varTarget = menuTarget?.variants?.find(v => v.name === targetItem.variant);
-      if (varTarget && targetItem.quantity + d > varTarget.qty) {
-        showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
-        return; 
+      if (menuTarget && menuTarget.itemType !== 'composite') {
+          const varTarget = menuTarget?.variants?.find(v => v.name === targetItem.variant);
+          if (varTarget && targetItem.quantity + d > varTarget.qty) {
+            showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
+            return; 
+          }
       }
     }
 
@@ -807,11 +831,12 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
 
   const currentVarObj = availableVariants.find(v => v.name === selectedVariant);
   const maxQty = currentVarObj ? currentVarObj.qty : 0;
-  const isOutOfStock = maxQty <= 0;
-  const isOverStock = qty > maxQty;
+  const isComposite = item.itemType === 'composite';
+  const isOutOfStock = !isComposite && maxQty <= 0;
+  const isOverStock = !isComposite && qty > maxQty;
 
   const handleIncreaseQty = () => {
-    if (qty < maxQty) setQty(qty + 1);
+    if (isComposite || qty < maxQty) setQty(qty + 1);
   };
 
   return (
@@ -830,15 +855,19 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
         </div>
 
         <div className="flex-1 overflow-y-auto p-6 bg-white z-10">
-          <h3 className="font-bold text-slate-800 mb-3 text-sm">Pilih Varian</h3>
-          <div className="space-y-2 mb-6">
-            {availableVariants.map(v => (
-              <label key={v.name} className={`flex items-center justify-between p-4 border rounded-xl ${selectedVariant === v.name ? 'border-red-500 bg-red-50/50' : 'border-slate-200'} ${v.qty <= 0 ? 'opacity-50' : ''}`}>
-                <span className="font-medium text-slate-700">{v.name} {v.qty <= 0 && '(Habis)'}</span>
-                {v.qty > 0 && <input type="radio" checked={selectedVariant === v.name} onChange={() => setSelectedVariant(v.name)} className="w-5 h-5 accent-red-500" />}
-              </label>
-            ))}
-          </div>
+          {availableVariants.length > 0 && (
+              <>
+                <h3 className="font-bold text-slate-800 mb-3 text-sm">Pilih Varian</h3>
+                <div className="space-y-2 mb-6">
+                  {availableVariants.map(v => (
+                    <label key={v.name} className={`flex items-center justify-between p-4 border rounded-xl ${selectedVariant === v.name ? 'border-red-500 bg-red-50/50' : 'border-slate-200'} ${(!isComposite && v.qty <= 0) ? 'opacity-50' : ''}`}>
+                      <span className="font-medium text-slate-700">{v.name} {(!isComposite && v.qty <= 0) && '(Habis)'}</span>
+                      {((isComposite) || v.qty > 0) && <input type="radio" checked={selectedVariant === v.name} onChange={() => setSelectedVariant(v.name)} className="w-5 h-5 accent-red-500" />}
+                    </label>
+                  ))}
+                </div>
+              </>
+          )}
           <h3 className="font-bold text-slate-800 mb-3 text-sm">Catatan Tambahan</h3>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Contoh: pedas sekali..." className="w-full p-4 border border-slate-200 rounded-xl focus:border-red-500 outline-none text-sm resize-none" rows="2" />
         </div>
@@ -846,11 +875,11 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
           <div className="flex items-center gap-4 bg-slate-100 p-2 rounded-xl">
             <button onClick={() => setQty(Math.max(1, qty - 1))} className="w-10 h-10 bg-white rounded-lg shadow-sm"><Minus size={18} className="mx-auto"/></button>
             <span className="font-bold text-lg w-4 text-center">{qty}</span>
-            <button onClick={handleIncreaseQty} className={`w-10 h-10 bg-white rounded-lg shadow-sm ${qty >= maxQty ? 'text-slate-300 cursor-not-allowed' : 'text-red-600'}`}><Plus size={18} className="mx-auto"/></button>
+            <button onClick={handleIncreaseQty} className={`w-10 h-10 bg-white rounded-lg shadow-sm ${(!isComposite && qty >= maxQty) ? 'text-slate-300 cursor-not-allowed' : 'text-red-600'}`}><Plus size={18} className="mx-auto"/></button>
           </div>
           <button 
-            onClick={() => onAdd(item, selectedVariant, qty, note)} 
-            disabled={!selectedVariant || isOutOfStock || isOverStock} 
+            onClick={() => onAdd(item, selectedVariant || 'default', qty, note)} 
+            disabled={(!selectedVariant && availableVariants.length > 0) || isOutOfStock || isOverStock} 
             className={`flex-1 text-white font-bold py-4 rounded-xl disabled:opacity-50 transition-colors ${isOutOfStock || isOverStock ? 'bg-slate-400 cursor-not-allowed' : 'bg-red-600 hover:bg-red-700 shadow-md'}`}
           >
             {isOutOfStock ? "Stok Habis" : isOverStock ? `Stok sisa ${maxQty}` : `Tambah - ${formatRp(item.price * qty)}`}
@@ -926,10 +955,12 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
       currentCartQty = cart[existingIdx].qty;
     }
 
-    if (varTarget && currentCartQty + quantity > varTarget.qty) {
+    if (item.itemType !== 'composite' && varTarget && currentCartQty + quantity > varTarget.qty) {
        showToast(`Stok tidak cukup! Sisa stok: ${varTarget.qty}`, 'error');
        return;
     }
+
+    const calculatedHPP = getMenuHPP(item, variantName, menus);
 
     setCart(prevCart => {
       const idx = prevCart.findIndex(c => c.originalId === (item.dbId || item.id) && c.variantId === variantId && c.note === note);
@@ -938,7 +969,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         newCart[idx] = { ...newCart[idx], qty: newCart[idx].qty + quantity };
         return newCart;
       } else {
-        return [...prevCart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note, cartId: Date.now() }];
+        return [...prevCart, { ...item, name: item.name, price: itemPrice, qty: quantity, variantId, originalId: (item.dbId || item.id), note, hpp: calculatedHPP, cartId: Date.now() }];
       }
     });
     setVariantModal(false);
@@ -966,6 +997,41 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
   const calculateSubtotal = () => cart.reduce((sum, item) => sum + (item.price * item.qty), 0);
   const calculateTotal = () => Math.max(0, calculateSubtotal() - discountAmount);
   const calculateChange = () => cashAmount ? parseInt(cashAmount.replace(/\D/g, '')) - calculateTotal() : 0;
+
+  const deductStockForOrder = async (itemsArray) => {
+      for (const item of itemsArray) {
+        const menuTarget = menus.find(m => m.dbId === (item.originalId || item.dbId || item.id));
+        if (menuTarget) {
+          const deductQty = Number(item.qty || item.quantity || 1);
+          const variantName = item.variantId || item.variant || 'default';
+          
+          if (menuTarget.itemType === 'composite' && menuTarget.ingredients) {
+              for (const ing of menuTarget.ingredients) {
+                  const ingMenu = menus.find(m => m.dbId === ing.menuId);
+                  if (ingMenu && ingMenu.itemType !== 'composite') {
+                      const totalDeduct = deductQty * ing.qty;
+                      const targetVarName = ing.variantId || 'default';
+                      const updatedVariants = ingMenu.variants.map(v => 
+                          (v.name === targetVarName || ingMenu.variants.length === 1) 
+                          ? { ...v, qty: Math.max(0, Number(v.qty) - totalDeduct) } 
+                          : v
+                      );
+                      const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
+                      const updates = { variants: updatedVariants };
+                      if (totalQty <= 0) updates.isActive = false;
+                      await updateDoc(getDocRef('menu', ingMenu.dbId), updates);
+                  }
+              }
+          } else {
+              const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v);
+              const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
+              const updates = { variants: updatedVariants };
+              if (totalQty <= 0) updates.isActive = false; 
+              await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
+          }
+        }
+      }
+  };
 
   const handleCheckout = async () => {
     if (!paymentMethod) return showToast("Pilih metode pembayaran!", "error");
@@ -1004,18 +1070,7 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
         }
       }
 
-      for (const item of cart) {
-        const menuTarget = menus.find(m => m.dbId === (item.originalId || item.dbId || item.id));
-        if (menuTarget) {
-          const deductQty = Number(item.qty || item.quantity || 1);
-          const variantName = item.variantId || item.variant || 'default';
-          const updatedVariants = menuTarget.variants.map(v => v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v);
-          const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
-          const updates = { variants: updatedVariants };
-          if (totalQty <= 0) updates.isActive = false; 
-          await updateDoc(getDocRef('menu', menuTarget.dbId), updates);
-        }
-      }
+      await deductStockForOrder(cart);
 
       setCart([]); setPromoCode(""); setAppliedPromo(null); setPaymentMethod(''); setCashAmount(''); setCheckoutModal(false); setActiveBill(null);
       showToast("Pembayaran Berhasil! Struk siap dicetak.", "success");
@@ -1124,8 +1179,22 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
             {isSidebarOpen && <button onClick={()=>setIsSidebarOpen(false)} className="md:hidden p-1 bg-slate-100 rounded text-slate-500"><X size={20}/></button>}
           </div>
           <nav className="p-3 space-y-2">
-            {[{id:'kasir', icon: ChefHat, label: 'Kasir'}, {id:'pesanan', icon: Clock, label: 'Pesanan'}, {id:'openbill', icon: FolderOpen, label: 'Open Bill'}, {id:'menu', icon: UtensilsCrossed, label: 'Menu Admin'}, {id:'members', icon: Users, label: 'Member'}, {id:'promos', icon: Tag, label: 'Promo'}].map(tab => (
-              <button key={tab.id} onClick={() => {setActiveTab(tab.id); if(window.innerWidth<768) setIsSidebarOpen(false);}} className={`relative w-full flex items-center px-3 py-3 rounded-xl transition-colors ${activeTab === tab.id ? 'bg-red-600 text-white shadow-md' : 'text-slate-500 hover:bg-red-50'} ${isSidebarOpen ? 'gap-3' : 'justify-center'}`}>
+            {[
+              {id:'kasir', icon: ChefHat, label: 'Kasir'}, 
+              {id:'pesanan', icon: Clock, label: 'Pesanan'}, 
+              {id:'openbill', icon: FolderOpen, label: 'Open Bill'}, 
+              {id:'laporan', icon: BarChart3, label: 'Laporan'},
+              {id:'menu', icon: UtensilsCrossed, label: 'Menu Admin'}, 
+              {id:'members', icon: Users, label: 'Member'}, 
+              {id:'promos', icon: Tag, label: 'Promo'}
+            ].map(tab => (
+              <button key={tab.id} onClick={() => {
+                  setActiveTab(tab.id); 
+                  setShowSaveBillModal(false); 
+                  setCheckoutModal(false); 
+                  setVariantModal(false); 
+                  if(window.innerWidth<768) setIsSidebarOpen(false);
+              }} className={`relative w-full flex items-center px-3 py-3 rounded-xl transition-colors ${activeTab === tab.id ? 'bg-red-600 text-white shadow-md' : 'text-slate-500 hover:bg-red-50'} ${isSidebarOpen ? 'gap-3' : 'justify-center'}`}>
                 <tab.icon size={22} className="shrink-0" />
                 <span className={`font-bold transition-opacity whitespace-nowrap ${isSidebarOpen ? 'opacity-100 block' : 'opacity-0 hidden'}`}>{tab.label}</span>
                 {tab.id === 'openbill' && savedBills.length > 0 && <span className={`absolute bg-yellow-400 text-black text-xs py-0.5 rounded-full font-bold ${isSidebarOpen ? 'right-4 px-2' : 'top-1 right-1 px-1.5 text-[10px]'}`}>{savedBills.length}</span>}
@@ -1189,10 +1258,12 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
                       <span className="w-4 text-center font-bold text-sm">{item.qty}</span>
                       <button onClick={() => {
                         const menuTarget = menus.find(m => m.dbId === item.originalId);
-                        const varTarget = menuTarget?.variants?.find(v => v.name === item.variantId);
-                        if (varTarget && item.qty + 1 > varTarget.qty) {
-                          showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
-                          return;
+                        if (menuTarget && menuTarget.itemType !== 'composite') {
+                            const varTarget = menuTarget?.variants?.find(v => v.name === item.variantId);
+                            if (varTarget && item.qty + 1 > varTarget.qty) {
+                              showToast(`Sisa stok hanya ${varTarget.qty}`, 'error');
+                              return;
+                            }
                         }
                         setCart(c => c.map(i=> i.originalId===item.originalId && i.variantId===item.variantId && i.note===item.note ? {...i, qty: i.qty+1} : i));
                       }} className="w-7 h-7 bg-white rounded flex items-center justify-center text-red-600 shadow-sm"><Plus size={14}/></button>
@@ -1288,18 +1359,188 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
           </div>
         )}
 
-        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} />}
-        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
-        {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} />}
+        {activeTab === 'laporan' && <AdminReportManager orders={orders} menus={menus} formatRp={formatRp} />}
+        {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} deductStockForOrder={deductStockForOrder} />}
+        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} showToast={showToast} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
+        {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} getMenuHPP={getMenuHPP} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} members={members} db={db} formatRp={formatRp} showToast={showToast} />}
+
+        {variantModal && (
+          <VariantModal item={variantModal} onClose={() => setVariantModal(false)} onAdd={addToCartFinal} formatRp={formatRp} />
+        )}
 
       </div>
     </div>
   );
 }
 
-function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showToast, onPrint }) {
+function AdminReportManager({ orders, menus, formatRp }) {
+  const [filterType, setFilterType] = useState('today'); // today, week, month, custom
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+
+  const filteredOrders = useMemo(() => {
+    const now = new Date();
+    let start = new Date();
+    let end = new Date();
+
+    if (filterType === 'today') {
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+    } else if (filterType === 'week') {
+      const first = now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1); // Monday
+      start = new Date(now.setDate(first));
+      start.setHours(0, 0, 0, 0);
+      end = new Date(start);
+      end.setDate(start.getDate() + 6);
+      end.setHours(23, 59, 59, 999);
+    } else if (filterType === 'month') {
+      start = new Date(now.getFullYear(), now.getMonth(), 1);
+      end = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    } else if (filterType === 'custom' && startDate && endDate) {
+      start = new Date(startDate);
+      start.setHours(0, 0, 0, 0);
+      end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
+    } else {
+      start.setHours(0, 0, 0, 0);
+      end.setHours(23, 59, 59, 999);
+    }
+
+    return orders.filter(o => {
+       const oDate = new Date(o.timestamp);
+       return oDate >= start && oDate <= end && (o.status === 'Selesai' || o.status === 'Diproses');
+    });
+  }, [orders, filterType, startDate, endDate]);
+
+  const reportMetrics = useMemo(() => {
+    let grossSales = 0;
+    let netSales = 0;
+    let totalCogs = 0;
+    let itemsSoldMap = {};
+
+    filteredOrders.forEach(order => {
+       grossSales += (order.originalTotal || order.total);
+       netSales += order.total; // after discount
+       
+       order.items.forEach(item => {
+           const qty = Number(item.qty || item.quantity || 1);
+           const price = Number(item.price || 0);
+           const hpp = Number(item.hpp || 0);
+           const lineSales = price * qty;
+           const lineCogs = hpp * qty;
+           
+           totalCogs += lineCogs;
+
+           const key = `${item.originalId || item.dbId}_${item.variantId || item.variant || 'default'}`;
+           if (!itemsSoldMap[key]) {
+               itemsSoldMap[key] = {
+                   name: item.name,
+                   variant: item.variantId || item.variant || 'default',
+                   qty: 0,
+                   sales: 0,
+                   cogs: 0
+               };
+           }
+           itemsSoldMap[key].qty += qty;
+           itemsSoldMap[key].sales += lineSales;
+           itemsSoldMap[key].cogs += lineCogs;
+       });
+    });
+
+    return {
+        grossSales,
+        netSales,
+        totalCogs,
+        grossProfit: netSales - totalCogs,
+        itemDetails: Object.values(itemsSoldMap).sort((a, b) => b.qty - a.qty)
+    };
+  }, [filteredOrders]);
+
+  return (
+    <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
+      <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 sticky top-0">
+        <h2 className="text-2xl font-bold mb-4">Laporan Penjualan</h2>
+        <div className="flex flex-wrap gap-3 items-center">
+            <select value={filterType} onChange={e => setFilterType(e.target.value)} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none font-bold text-slate-700">
+                <option value="today">Hari Ini</option>
+                <option value="week">Minggu Ini</option>
+                <option value="month">Bulan Ini</option>
+                <option value="custom">Pilih Tanggal</option>
+            </select>
+            {filterType === 'custom' && (
+                <div className="flex items-center gap-2">
+                    <input type="date" value={startDate} onChange={e=>setStartDate(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                    <span className="text-slate-400">-</span>
+                    <input type="date" value={endDate} onChange={e=>setEndDate(e.target.value)} className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm" />
+                </div>
+            )}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center"><Banknote size={24}/></div>
+                  <div><p className="text-slate-500 text-sm font-medium">Penjualan Kotor</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.grossSales)}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+                  <div className="w-12 h-12 bg-green-50 text-green-600 rounded-xl flex items-center justify-center"><TrendingUp size={24}/></div>
+                  <div><p className="text-slate-500 text-sm font-medium">Penjualan Bersih (Nett)</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.netSales)}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+                  <div className="w-12 h-12 bg-orange-50 text-orange-600 rounded-xl flex items-center justify-center"><Box size={24}/></div>
+                  <div><p className="text-slate-500 text-sm font-medium">Total HPP</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.totalCogs)}</p></div>
+              </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+                  <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center"><BarChart3 size={24}/></div>
+                  <div><p className="text-slate-500 text-sm font-medium">Laba Kotor</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.grossProfit)}</p></div>
+              </div>
+          </div>
+
+          <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mt-8">
+              <div className="p-5 border-b border-slate-100 bg-slate-50"><h3 className="font-bold text-slate-800">Detail Penjualan Item</h3></div>
+              <div className="overflow-x-auto">
+                  <table className="w-full text-left text-sm">
+                      <thead className="bg-white border-b border-slate-100 text-slate-500">
+                          <tr>
+                              <th className="p-4 font-semibold">Nama Item</th>
+                              <th className="p-4 font-semibold">Varian</th>
+                              <th className="p-4 font-semibold text-center">Terjual</th>
+                              <th className="p-4 font-semibold text-right">Penjualan</th>
+                              <th className="p-4 font-semibold text-right">HPP Item</th>
+                              <th className="p-4 font-semibold text-right">Margin Laba</th>
+                          </tr>
+                      </thead>
+                      <tbody>
+                          {reportMetrics.itemDetails.length === 0 ? (
+                              <tr><td colSpan="6" className="p-8 text-center text-slate-400">Belum ada data penjualan.</td></tr>
+                          ) : (
+                              reportMetrics.itemDetails.map((item, i) => (
+                                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50">
+                                      <td className="p-4 font-medium text-slate-800">{item.name}</td>
+                                      <td className="p-4 text-slate-600">{item.variant}</td>
+                                      <td className="p-4 text-center font-bold">{item.qty}</td>
+                                      <td className="p-4 text-right text-slate-800 font-medium">{formatRp(item.sales)}</td>
+                                      <td className="p-4 text-right text-orange-600 font-medium">{formatRp(item.cogs)}</td>
+                                      <td className="p-4 text-right">
+                                          <div className="text-green-600 font-bold">{formatRp(item.sales - item.cogs)}</div>
+                                          <div className="text-xs text-slate-500 mt-0.5">{item.sales > 0 ? (((item.sales - item.cogs) / item.sales) * 100).toFixed(1) : 0}%</div>
+                                      </td>
+                                  </tr>
+                              ))
+                          )}
+                      </tbody>
+                  </table>
+              </div>
+          </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showToast, onPrint, deductStockForOrder }) {
   const STATUS_OPTIONS = ['Menunggu Konfirmasi', 'Pembayaran Diterima', 'Diproses', 'Selesai', 'Dibatalkan'];
   
   const [searchQuery, setSearchQuery] = useState("");
@@ -1319,7 +1560,6 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     try {
       const updates = { status: newStatus };
       
-      // Jika diproses ATAU langsung di-set ke selesai, potong stok!
       if (newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
@@ -1328,26 +1568,9 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
         }
         if (!target.isStockDeducted) {
           updates.isStockDeducted = true;
-          for (const item of target.items) {
-            const menuTarget = menus.find(m => m.dbId === (item.dbId || item.originalId || item.id));
-            if (menuTarget) {
-              const deductQty = Number(item.quantity || item.qty || 1);
-              const variantName = item.variant || item.variantId;
-              
-              const updatedVariants = menuTarget.variants.map(v => 
-                v.name === variantName ? { ...v, qty: Math.max(0, Number(v.qty) - deductQty) } : v
-              );
-              
-              const totalQty = updatedVariants.reduce((sum, v) => sum + (Number(v.qty) || 0), 0);
-              const menuUpdates = { variants: updatedVariants };
-              if (totalQty <= 0) menuUpdates.isActive = false; // AUTO HIDE jika stok 0
-              
-              await updateDoc(getDocRef('menu', menuTarget.dbId), menuUpdates);
-            }
-          }
+          await deductStockForOrder(target.items);
         }
       } else if (newStatus === 'Dibatalkan') {
-        // Kembalikan Stok jika pesanan dibatalkan
         if (target.isStockDeducted) {
           updates.isStockDeducted = false;
           for (const item of target.items) {
@@ -1356,16 +1579,30 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
               const addQty = Number(item.quantity || item.qty || 1);
               const variantName = item.variant || item.variantId;
               
-              const updatedVariants = menuTarget.variants.map(v => 
-                v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
-              );
-              // Jadikan menu Aktif kembali karena stok bertambah
-              await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
+              if (menuTarget.itemType === 'composite' && menuTarget.ingredients) {
+                  for (const ing of menuTarget.ingredients) {
+                      const ingMenu = menus.find(m => m.dbId === ing.menuId);
+                      if (ingMenu && ingMenu.itemType !== 'composite') {
+                          const totalAdd = addQty * ing.qty;
+                          const targetVarName = ing.variantId || 'default';
+                          const updatedVariants = ingMenu.variants.map(v => 
+                              (v.name === targetVarName || ingMenu.variants.length === 1) 
+                              ? { ...v, qty: Number(v.qty) + totalAdd } 
+                              : v
+                          );
+                          await updateDoc(getDocRef('menu', ingMenu.dbId), { variants: updatedVariants, isActive: true });
+                      }
+                  }
+              } else {
+                  const updatedVariants = menuTarget.variants.map(v => 
+                    v.name === variantName ? { ...v, qty: Number(v.qty) + addQty } : v
+                  );
+                  await updateDoc(getDocRef('menu', menuTarget.dbId), { variants: updatedVariants, isActive: true });
+              }
             }
           }
         }
         
-        // --- KEMBALIKAN STOK PROMO & CABUT STATUS PENGGUNAAN ---
         if (target.discount && target.discount.dbId) {
           const promoToUpdate = promos.find(p => p.dbId === target.discount.dbId);
           if (promoToUpdate) {
@@ -1377,7 +1614,6 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
           }
         }
 
-        // Tarik kembali poin jika pelanggan membatalkan pesanan
         if (target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = false;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
@@ -1517,22 +1753,223 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
   );
 }
 
-function AdminOpenBill({ savedBills, db, handleLoadBill }) {
+function AdminOpenBill({ savedBills, db, handleLoadBill, showToast }) {
+  const [isMergeMode, setIsMergeMode] = useState(false);
+  const [selectedForMerge, setSelectedForMerge] = useState([]);
+  const [mergeBillName, setMergeBillName] = useState('');
+
+  const [splitBillModal, setSplitBillModal] = useState(null);
+  const [splitQuantities, setSplitQuantities] = useState({});
+  const [splitBillName, setSplitBillName] = useState('');
+
+  const handleToggleMerge = (dbId) => {
+    setSelectedForMerge(prev => prev.includes(dbId) ? prev.filter(id => id !== dbId) : [...prev, dbId]);
+  };
+
+  const handleMergeSubmit = async () => {
+    if (selectedForMerge.length < 2) return showToast("Pilih minimal 2 bill untuk digabung", "error");
+    if (!mergeBillName.trim()) return showToast("Nama bill gabungan harus diisi!", "error");
+
+    try {
+        let combinedItems = [];
+        const billsToMerge = savedBills.filter(b => selectedForMerge.includes(b.dbId));
+        
+        billsToMerge.forEach(bill => {
+            bill.items.forEach(item => {
+                const existingIdx = combinedItems.findIndex(i => i.originalId === item.originalId && i.variantId === item.variantId && i.note === item.note);
+                if(existingIdx > -1) {
+                    combinedItems[existingIdx].qty += item.qty;
+                } else {
+                    combinedItems.push({...item, cartId: Date.now() + Math.random()});
+                }
+            });
+        });
+
+        const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+        await setDoc(doc(db, 'savedBills', `BILL-MERGED-${Date.now()}`), {
+            name: mergeBillName,
+            phone: billsToMerge[0].phone || '',
+            items: combinedItems,
+            timeString: timeStr,
+            timestamp: Date.now()
+        });
+
+        for(const id of selectedForMerge) {
+            await deleteDoc(doc(db, 'savedBills', id));
+        }
+
+        setSelectedForMerge([]);
+        setIsMergeMode(false);
+        setMergeBillName('');
+        showToast("Berhasil menggabungkan bill", "success");
+    } catch(e) {
+        showToast("Gagal menggabungkan bill", "error");
+    }
+  };
+
+  const openSplitModal = (bill) => {
+      setSplitBillModal(bill);
+      setSplitBillName(`${bill.name} - Split`);
+      const initialQtys = {};
+      bill.items.forEach(item => {
+          initialQtys[item.cartId] = 0;
+      });
+      setSplitQuantities(initialQtys);
+  };
+
+  const updateSplitQty = (cartId, d, max) => {
+      setSplitQuantities(prev => {
+          const current = prev[cartId] || 0;
+          const next = current + d;
+          if (next < 0 || next > max) return prev;
+          return { ...prev, [cartId]: next };
+      });
+  };
+
+  const handleSplitSubmit = async () => {
+      const movedItems = [];
+      const remainingItems = [];
+
+      splitBillModal.items.forEach(item => {
+          const moveQty = splitQuantities[item.cartId] || 0;
+          const remainQty = item.qty - moveQty;
+
+          if (moveQty > 0) {
+              movedItems.push({ ...item, qty: moveQty, cartId: Date.now() + Math.random() });
+          }
+          if (remainQty > 0) {
+              remainingItems.push({ ...item, qty: remainQty });
+          }
+      });
+
+      if (movedItems.length === 0) return showToast("Pilih minimal 1 item untuk dipisah", "error");
+      if (!splitBillName.trim()) return showToast("Nama bill baru harus diisi!", "error");
+
+      try {
+          const timeStr = new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }).replace('.', ':');
+          
+          await setDoc(doc(db, 'savedBills', `BILL-SPLIT-${Date.now()}`), {
+              name: splitBillName,
+              phone: splitBillModal.phone || '',
+              items: movedItems,
+              timeString: timeStr,
+              timestamp: Date.now()
+          });
+
+          if (remainingItems.length === 0) {
+              await deleteDoc(doc(db, 'savedBills', splitBillModal.dbId));
+          } else {
+              await updateDoc(doc(db, 'savedBills', splitBillModal.dbId), {
+                  items: remainingItems
+              });
+          }
+
+          setSplitBillModal(null);
+          setSplitQuantities({});
+          setSplitBillName('');
+          showToast("Berhasil memisahkan bill", "success");
+      } catch(e) {
+          showToast("Gagal memisahkan bill", "error");
+      }
+  };
+
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50"><h2 className="text-2xl font-bold mb-6">Tagihan Tersimpan (Open Bill)</h2>
+    <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
+      <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+        <h2 className="text-2xl font-bold">Tagihan Tersimpan (Open Bill)</h2>
+        <div className="flex gap-2">
+            {isMergeMode ? (
+               <div className="flex items-center gap-2">
+                   <input type="text" value={mergeBillName} onChange={e => setMergeBillName(e.target.value)} placeholder="Nama Bill Gabungan" className="px-3 py-2 border border-slate-300 rounded-xl text-sm outline-none w-48 focus:border-blue-500" />
+                   <button onClick={() => { setIsMergeMode(false); setSelectedForMerge([]); setMergeBillName(''); }} className="px-4 py-2 bg-slate-200 text-slate-700 rounded-xl font-bold text-sm">Batal</button>
+                   <button onClick={handleMergeSubmit} className="px-4 py-2 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-md">Gabungkan ({selectedForMerge.length})</button>
+               </div>
+            ) : (
+               <button onClick={() => { setIsMergeMode(true); setMergeBillName("Gabungan Bill"); }} className="px-4 py-2 bg-blue-50 text-blue-600 border border-blue-200 rounded-xl font-bold text-sm flex items-center gap-2 transition-colors hover:bg-blue-100"><Layers size={16}/> Gabung Bill</button>
+            )}
+        </div>
+      </div>
+      
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
         {savedBills.map(bill => (
-          <div key={bill.dbId} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-100 flex flex-col">
-            <h3 className="font-bold text-lg mb-1">{bill.name}</h3><p className="text-xs text-slate-400 mb-4">{bill.timeString}</p>
-            <div className="flex gap-2 mt-auto"><button onClick={()=>handleLoadBill(bill)} className="flex-1 bg-red-100 text-red-700 py-2 rounded-lg font-bold text-sm">Buka Kasir</button><button onClick={()=>deleteDoc(getDocRef('savedBills', bill.dbId))} className="p-2 text-red-500 border rounded-lg"><Trash2 size={16}/></button></div>
+          <div key={bill.dbId} className={`bg-white p-4 rounded-2xl shadow-sm border flex flex-col relative transition-all ${isMergeMode && selectedForMerge.includes(bill.dbId) ? 'border-blue-500 ring-2 ring-blue-200' : 'border-slate-100'}`}>
+            {isMergeMode && (
+                <div className="absolute top-4 right-4 z-10">
+                    <input type="checkbox" checked={selectedForMerge.includes(bill.dbId)} onChange={() => handleToggleMerge(bill.dbId)} className="w-5 h-5 accent-blue-600 cursor-pointer" />
+                </div>
+            )}
+            <h3 className="font-bold text-lg mb-1 pr-6">{bill.name}</h3>
+            <p className="text-xs text-slate-400 mb-3">{bill.timeString}</p>
+            
+            <div className="text-sm text-slate-600 mb-4 bg-slate-50 p-2 rounded-lg max-h-24 overflow-y-auto">
+                {bill.items.map((it, i) => (
+                    <div key={i} className="flex justify-between border-b border-slate-100 last:border-0 py-1">
+                        <span className="truncate pr-2 text-xs font-semibold">{it.qty}x {it.name}</span>
+                    </div>
+                ))}
+            </div>
+
+            <div className="flex gap-2 mt-auto">
+              <button onClick={() => !isMergeMode && handleLoadBill(bill)} disabled={isMergeMode} className="flex-1 bg-red-100 text-red-700 hover:bg-red-200 py-2 rounded-lg font-bold text-xs md:text-sm transition-colors disabled:opacity-50">Buka Kasir</button>
+              {!isMergeMode && (
+                  <button onClick={() => openSplitModal(bill)} className="p-2 bg-slate-100 text-slate-700 hover:bg-slate-200 rounded-lg text-xs font-bold px-3 transition-colors">Pisah</button>
+              )}
+              {!isMergeMode && (
+                  <button onClick={()=>deleteDoc(doc(db, 'savedBills', bill.dbId))} className="p-2 text-red-500 hover:bg-red-50 border rounded-lg transition-colors"><Trash2 size={16}/></button>
+              )}
+            </div>
           </div>
         ))}
       </div>
+      {savedBills.length === 0 && <div className="text-center py-10 text-slate-400 font-medium">Tidak ada tagihan yang tersimpan.</div>}
+
+      {/* MODAL PISAH (SPLIT) BILL */}
+      {splitBillModal && (
+        <div className="fixed inset-0 bg-slate-900/60 flex justify-center items-center z-50 p-4 backdrop-blur-sm">
+          <div className="bg-white rounded-3xl w-full max-w-md overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-in zoom-in-95 fade-in">
+              <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                  <h3 className="font-black text-xl text-slate-800">Pisah Bill (Split)</h3>
+                  <button onClick={()=>setSplitBillModal(null)} className="text-slate-400 hover:text-slate-600 transition-colors"><X size={20}/></button>
+              </div>
+              <div className="p-4 bg-blue-50 text-blue-800 text-sm border-b border-blue-100 leading-relaxed font-medium">
+                  Atur jumlah *Item* yang ingin dipindahkan dari <b>{splitBillModal.name}</b> ke dalam tagihan / Bill yang baru.
+              </div>
+              <div className="p-4 bg-white border-b border-slate-100">
+                  <label className="block text-xs font-bold text-slate-600 mb-1">Nama Bill Baru (Pecahan)</label>
+                  <input type="text" value={splitBillName} onChange={e => setSplitBillName(e.target.value)} placeholder="Masukkan nama bill baru" className="w-full px-4 py-2.5 border border-slate-300 rounded-xl outline-none focus:border-blue-500 font-semibold text-sm" />
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {splitBillModal.items.map(item => {
+                      const moveQty = splitQuantities[item.cartId] || 0;
+                      return (
+                          <div key={item.cartId} className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex justify-between items-center gap-2">
+                              <div className="flex-1 min-w-0">
+                                  <p className="font-bold text-sm text-slate-800 truncate">{item.name}</p>
+                                  <p className="text-xs text-slate-500">{item.variantId}</p>
+                                  <p className="text-xs font-semibold text-slate-500 mt-1">Sisa Stok di Bill: {item.qty - moveQty}</p>
+                              </div>
+                              <div className="flex items-center gap-3 bg-white p-1 rounded-lg border border-slate-200 shadow-sm">
+                                  <button onClick={() => updateSplitQty(item.cartId, -1, item.qty)} className="w-8 h-8 flex items-center justify-center bg-slate-100 rounded-md text-slate-600 hover:bg-slate-200 disabled:opacity-30 transition-colors" disabled={moveQty <= 0}><Minus size={14}/></button>
+                                  <span className="font-bold text-blue-600 w-4 text-center">{moveQty}</span>
+                                  <button onClick={() => updateSplitQty(item.cartId, 1, item.qty)} className="w-8 h-8 flex items-center justify-center bg-blue-100 rounded-md text-blue-600 hover:bg-blue-200 disabled:opacity-30 transition-colors" disabled={moveQty >= item.qty}><Plus size={14}/></button>
+                              </div>
+                          </div>
+                      );
+                  })}
+              </div>
+              <div className="p-5 border-t border-slate-100 bg-white">
+                  <button type="button" onClick={handleSplitSubmit} className="w-full py-4 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 shadow-md transition-colors">
+                      Pisahkan ke Bill Baru
+                  </button>
+              </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-function AdminMenuManager({ menus, db, formatRp, showToast }) {
+function AdminMenuManager({ menus, db, formatRp, showToast, getMenuHPP }) {
   const [form, setForm] = useState(null);
   const [searchMenu, setSearchMenu] = useState("");
   
@@ -1543,43 +1980,163 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
 
   const handleSave = async (e) => {
     e.preventDefault();
-    if(form.variants.length === 0) return showToast("Minimal 1 varian!", "error");
+    if(form.itemType !== 'composite' && form.variants.length === 0) return showToast("Minimal 1 varian untuk item standar!", "error");
     try {
-      const data = { ...form, price: Number(form.price), orderPriority: Number(form.orderPriority)||99 };
+      const data = { 
+          ...form, 
+          price: Number(form.price), 
+          hpp: form.itemType === 'composite' ? 0 : Number(form.hpp || 0),
+          orderPriority: Number(form.orderPriority)||99 
+      };
+      
+      if (data.itemType === 'composite' && !data.ingredients) data.ingredients = [];
+
       if(form.dbId) await updateDoc(getDocRef('menu', form.dbId), data);
       else await addDoc(getColRef('menu'), data);
       setForm(null); showToast("Menu disimpan");
     } catch(e) { showToast("Gagal menyimpan", "error"); }
   };
 
-  if(form) return (
-    <div className="flex-1 p-6 bg-white overflow-y-auto">
-      <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Menu</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
-      <form onSubmit={handleSave} className="max-w-2xl space-y-4">
-        <div className="flex gap-4 items-center"><input type="checkbox" checked={form.isActive!==false} onChange={e=>setForm({...form, isActive: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold">Tampilkan di Kasir/App</label></div>
-        <div><label className="font-bold text-sm">Nama Menu</label><input required value={form.name} onChange={e=>setForm({...form, name: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
-        <div><label className="font-bold text-sm">Deskripsi Singkat</label><textarea value={form.desc || ''} onChange={e=>setForm({...form, desc: e.target.value})} placeholder="Jelaskan komposisi makanan ini..." className="w-full p-3 border rounded-xl resize-none outline-none focus:border-slate-400" rows="2" /></div>
-        <div className="flex gap-4"><div className="flex-1"><label className="font-bold text-sm">Harga (Rp)</label><input type="number" required value={form.price} onChange={e=>setForm({...form, price: e.target.value})} className="w-full p-3 border rounded-xl" /></div><div className="w-24"><label className="font-bold text-sm">Urutan</label><input type="number" value={form.orderPriority||99} onChange={e=>setForm({...form, orderPriority: e.target.value})} className="w-full p-3 border rounded-xl text-center" /></div></div>
-        <div><label className="font-bold text-sm">URL Gambar</label><input required type="url" value={form.image} onChange={e=>setForm({...form, image: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
-        
-        {/* FITUR AUTO-HIDE WAKTU */}
-        <div className="border-t pt-4 bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2">
-           <div className="flex items-center gap-2 mb-3"><input type="checkbox" checked={form.isTimeRestricted||false} onChange={e=>setForm({...form, isTimeRestricted: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold text-sm">Batasi Waktu Penjualan</label></div>
-           {form.isTimeRestricted && (
-              <div className="flex gap-4">
-                 <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">Jam Mulai (HH:MM)</label><input type="time" value={form.startTime||''} onChange={e=>setForm({...form, startTime: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
-                 <div className="flex-1"><label className="block text-xs font-bold text-slate-500 mb-1">Jam Berakhir (HH:MM)</label><input type="time" value={form.endTime||''} onChange={e=>setForm({...form, endTime: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
-              </div>
-           )}
-        </div>
+  const addIngredient = () => {
+      setForm(f => ({ ...f, ingredients: [...(f.ingredients || []), { menuId: '', variantId: 'default', qty: 1 }] }));
+  };
 
-        <div className="border-t pt-4"><label className="font-bold mb-2 block">Varian & Stok <button type="button" onClick={()=>setForm({...form, variants: [...form.variants, {name:'',qty:0}]})} className="bg-slate-900 text-white px-2 py-1 rounded text-xs ml-2">Tambah</button></label>
-          {form.variants.map((v, i) => <div key={i} className="flex gap-2 mb-2"><input required placeholder="Nama" value={v.name} onChange={e=>{const va=[...form.variants]; va[i].name=e.target.value; setForm({...form, variants:va})}} className="flex-1 p-2 border rounded-lg"/><input type="number" required value={v.qty} onChange={e=>{const va=[...form.variants]; va[i].qty=Number(e.target.value); setForm({...form, variants:va})}} className="w-20 p-2 border rounded-lg text-center"/><button type="button" onClick={()=>{const va=[...form.variants]; va.splice(i,1); setForm({...form, variants:va})}} className="p-2 text-red-500"><X size={16}/></button></div>)}
-        </div>
-        <button type="submit" className="w-full bg-red-600 text-white font-bold py-4 rounded-xl mt-6">Simpan Menu</button>
-      </form>
-    </div>
-  );
+  const updateIngredient = (index, field, value) => {
+      const ings = [...form.ingredients];
+      ings[index][field] = value;
+      setForm({ ...form, ingredients: ings });
+  };
+
+  const removeIngredient = (index) => {
+      const ings = [...form.ingredients];
+      ings.splice(index, 1);
+      setForm({ ...form, ingredients: ings });
+  };
+
+  if(form) {
+    const currentHPP = form.itemType === 'composite' ? getMenuHPP(form, 'default', menus) : (form.hpp || 0);
+    const formMargin = form.price > 0 ? (((form.price - currentHPP) / form.price) * 100).toFixed(1) : 0;
+    
+    return (
+      <div className="flex-1 p-6 bg-white overflow-y-auto">
+        <div className="flex justify-between mb-6"><h2 className="text-xl font-bold">Edit Menu</h2><button onClick={()=>setForm(null)}><X size={24}/></button></div>
+        <form onSubmit={handleSave} className="max-w-2xl space-y-4 pb-20">
+          <div className="flex gap-4 items-center"><input type="checkbox" checked={form.isActive!==false} onChange={e=>setForm({...form, isActive: e.target.checked})} className="w-5 h-5 accent-red-600"/><label className="font-bold">Tampilkan (Visibility)</label></div>
+          
+          <div><label className="font-bold text-sm">Nama Menu</label><input required value={form.name} onChange={e=>setForm({...form, name: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+          <div><label className="font-bold text-sm">Deskripsi Singkat</label><textarea value={form.desc || ''} onChange={e=>setForm({...form, desc: e.target.value})} placeholder="Jelaskan komposisi makanan ini..." className="w-full p-3 border rounded-xl resize-none outline-none focus:border-slate-400" rows="2" /></div>
+          
+          <div className="flex gap-4">
+              <div className="flex-1">
+                  <label className="font-bold text-sm">Tipe Item</label>
+                  <select value={form.itemType || 'standard'} onChange={e=>setForm({...form, itemType: e.target.value})} className="w-full p-3 border rounded-xl bg-white outline-none focus:border-slate-400">
+                      <option value="standard">Barang Standar</option>
+                      <option value="composite">Barang Komposit (Bahan Baku)</option>
+                  </select>
+              </div>
+              <div className="w-32"><label className="font-bold text-sm">Urutan</label><input type="number" value={form.orderPriority||99} onChange={e=>setForm({...form, orderPriority: e.target.value})} className="w-full p-3 border rounded-xl text-center" /></div>
+          </div>
+
+          <div className="flex gap-4">
+              <div className="flex-1"><label className="font-bold text-sm">Harga Jual (Price)</label><input type="number" required value={form.price} onChange={e=>setForm({...form, price: e.target.value})} className="w-full p-3 border rounded-xl text-red-600 font-bold" /></div>
+              
+              {form.itemType !== 'composite' ? (
+                  <div className="flex-1"><label className="font-bold text-sm text-orange-600">HPP / Harga Pokok Dasar</label><input type="number" value={form.hpp || 0} onChange={e=>setForm({...form, hpp: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+              ) : (
+                  <div className="flex-1"><label className="font-bold text-sm text-orange-600">Total HPP (Otomatis)</label><div className="w-full p-3 border bg-slate-100 rounded-xl font-bold text-orange-600">{formatRp(currentHPP)}</div></div>
+              )}
+
+              <div className="w-20 md:w-24">
+                  <label className="font-bold text-sm text-green-600">Margin</label>
+                  <div className="w-full p-3 border bg-green-50 border-green-200 rounded-xl font-bold text-green-700 text-center text-sm">{formMargin}%</div>
+              </div>
+          </div>
+
+          <div><label className="font-bold text-sm">URL Gambar</label><input required type="url" value={form.image} onChange={e=>setForm({...form, image: e.target.value})} className="w-full p-3 border rounded-xl" /></div>
+          
+          {/* FITUR AUTO-HIDE WAKTU */}
+          <div className="border-t pt-4 bg-slate-50 p-4 rounded-xl border border-slate-200 mt-2">
+             <div className="flex items-center gap-2 mb-3">
+                 <input type="checkbox" checked={form.isTimeRestricted||false} onChange={e=>setForm({...form, isTimeRestricted: e.target.checked})} className="w-5 h-5 accent-red-600"/>
+                 <label className="font-bold text-sm">Batasi Waktu Penjualan</label>
+             </div>
+             {form.isTimeRestricted && (
+                <div className="flex gap-4">
+                   <div className="flex-1">
+                       <label className="block text-xs font-bold text-slate-500 mb-1">Jam Mulai (HH:MM)</label>
+                       <input type="time" value={form.startTime||''} onChange={e=>setForm({...form, startTime: e.target.value})} className="w-full p-3 border rounded-xl" />
+                   </div>
+                   <div className="flex-1">
+                       <label className="block text-xs font-bold text-slate-500 mb-1">Jam Berakhir (HH:MM)</label>
+                       <input type="time" value={form.endTime||''} onChange={e=>setForm({...form, endTime: e.target.value})} className="w-full p-3 border rounded-xl" />
+                   </div>
+                </div>
+             )}
+          </div>
+
+          {/* FITUR KOMPOSIT */}
+          {form.itemType === 'composite' && (
+              <div className="border-t pt-4 bg-orange-50 p-4 rounded-xl border border-orange-100 mt-2">
+                  <div className="flex justify-between items-center mb-3">
+                      <label className="font-bold text-sm text-orange-800">Komponen Bahan Baku</label>
+                      <button type="button" onClick={addIngredient} className="bg-orange-600 text-white px-3 py-1 rounded-lg text-xs font-bold shadow-sm">Tambah Komponen</button>
+                  </div>
+                  <div className="space-y-2">
+                      {(form.ingredients || []).map((ing, i) => (
+                          <div key={i} className="flex gap-2 items-center bg-white p-2 rounded-lg border border-orange-200">
+                              <select required value={ing.menuId} onChange={e => updateIngredient(i, 'menuId', e.target.value)} className="flex-[2] p-2 border rounded-lg text-sm bg-slate-50">
+                                  <option value="">Pilih Item...</option>
+                                  {menus.filter(m => m.dbId !== form.dbId && m.itemType !== 'composite').map(m => (
+                                      <option key={m.dbId} value={m.dbId}>{m.name}</option>
+                                  ))}
+                              </select>
+                              <input type="number" required min="0.01" step="0.01" value={ing.qty} onChange={e => updateIngredient(i, 'qty', Number(e.target.value))} className="w-20 p-2 border rounded-lg text-center text-sm" placeholder="Qty" />
+                              <div className="w-24 text-right text-xs font-semibold text-slate-500 whitespace-nowrap">
+                                  {formatRp(getMenuHPP(menus.find(m => m.dbId === ing.menuId), 'default', menus) * ing.qty)}
+                              </div>
+                              <button type="button" onClick={()=>removeIngredient(i)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><X size={16}/></button>
+                          </div>
+                      ))}
+                      {(form.ingredients || []).length === 0 && <p className="text-xs text-orange-600/60 italic text-center py-2">Belum ada bahan baku yang ditambahkan.</p>}
+                  </div>
+                  <p className="text-xs text-orange-700 mt-3">*Stok item komposit tidak diatur manual. Saat item ini terjual, stok komponen akan otomatis terpotong.</p>
+              </div>
+          )}
+
+          {/* FITUR VARIAN & STOK (Hanya untuk item standar) */}
+          {form.itemType !== 'composite' && (
+              <div className="border-t pt-4 mt-4">
+                  <div className="flex justify-between items-center mb-2">
+                      <label className="font-bold">Varian & Stok</label>
+                      <button type="button" onClick={()=>setForm({...form, variants: [...form.variants, {name:'',qty:0, hpp: form.hpp || 0}]})} className="bg-slate-900 text-white px-3 py-1 rounded-lg text-xs font-bold shadow-sm">Tambah Varian</button>
+                  </div>
+                {form.variants.map((v, i) => (
+                    <div key={i} className="flex gap-2 mb-2 items-center bg-slate-50 p-2 rounded-xl border border-slate-100">
+                        <div className="flex-1">
+                            <input required placeholder="Nama Varian (Cth: Reguler)" value={v.name} onChange={e=>{const va=[...form.variants]; va[i].name=e.target.value; setForm({...form, variants:va})}} className="w-full p-2 border rounded-lg text-sm"/>
+                        </div>
+                        <div className="w-28 relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">HPP</span>
+                            <input type="number" placeholder="HPP" value={v.hpp !== undefined ? v.hpp : (form.hpp || 0)} onChange={e=>{const va=[...form.variants]; va[i].hpp=Number(e.target.value); setForm({...form, variants:va})}} className="w-full p-2 pl-9 border rounded-lg text-sm text-right"/>
+                        </div>
+                        <div className="w-14 bg-green-50 border border-green-100 rounded-lg flex items-center justify-center text-xs font-bold text-green-700 h-9">
+                            {form.price > 0 ? (((form.price - (v.hpp !== undefined ? v.hpp : (form.hpp || 0))) / form.price) * 100).toFixed(1) : 0}%
+                        </div>
+                        <div className="w-20 relative">
+                            <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-400">Stok</span>
+                            <input type="number" required value={v.qty} onChange={e=>{const va=[...form.variants]; va[i].qty=Number(e.target.value); setForm({...form, variants:va})}} className="w-full p-2 pl-8 border rounded-lg text-center text-sm font-bold"/>
+                        </div>
+                        <button type="button" onClick={()=>{const va=[...form.variants]; va.splice(i,1); setForm({...form, variants:va})}} className="p-2 text-red-500 hover:bg-red-50 rounded-lg"><X size={18}/></button>
+                    </div>
+                ))}
+              </div>
+          )}
+
+          <button type="submit" className="w-full bg-red-600 text-white font-bold py-4 rounded-xl mt-6 shadow-md hover:bg-red-700 transition-colors">Simpan Menu</button>
+        </form>
+      </div>
+    );
+  }
 
   const sortedMenus = menus.filter(m => m.name.toLowerCase().includes(searchMenu.toLowerCase())).sort((a, b) => {
     const aActive = a.isActive !== false; const bActive = b.isActive !== false;
@@ -1588,21 +2145,44 @@ function AdminMenuManager({ menus, db, formatRp, showToast }) {
   });
 
   return (
-    <div className="flex-1 p-6 overflow-y-auto bg-slate-50">
-      <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+    <div className="flex-1 p-6 md:p-8 overflow-y-auto bg-slate-50">
+      <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-8">
         <h2 className="text-2xl font-bold">Manajemen Menu</h2>
         <div className="flex gap-2">
            <div className="relative"><Search className="absolute left-3 top-2.5 text-slate-400" size={16} /><input type="text" placeholder="Cari menu..." value={searchMenu} onChange={e=>setSearchMenu(e.target.value)} className="pl-9 pr-3 py-2 border rounded-xl outline-none" /></div>
-           <button onClick={()=>setForm({name:'', desc:'', price:'', image:'', isActive:true, orderPriority:99, isTimeRestricted: false, startTime: '', endTime: '', variants:[{name:'Reguler',qty:100}]})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2"><Plus size={18}/> Tambah</button>
+           <button onClick={()=>setForm({name:'', desc:'', price:'', hpp:0, image:'', isActive:true, itemType:'standard', ingredients:[], orderPriority:99, isTimeRestricted: false, startTime: '', endTime: '', variants:[{name:'Reguler',qty:100, hpp:0}]})} className="bg-slate-900 text-white px-4 py-2 rounded-xl font-bold flex items-center gap-2"><Plus size={18}/> Tambah</button>
         </div>
       </div>
-      <div className="space-y-3">
+      <div className="space-y-5">
         {sortedMenus.map((menu, index) => (
-          <div key={menu.dbId} className={`bg-white p-4 rounded-2xl flex justify-between items-center ${menu.isActive===false?'opacity-50 grayscale':''}`}>
-            <div className="flex gap-3 items-center">
-              <span className="font-bold text-slate-400 text-lg w-6 text-center">{index + 1}</span>
-              <img src={menu.image} className="w-16 h-16 rounded-xl object-cover" />
-              <div><h3 className="font-bold">{menu.name} {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider ml-2">Hidden</span>} {menu.isTimeRestricted && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold ml-1"><Clock size={10} className="inline mr-1"/>Waktu</span>}</h3><p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p></div>
+          <div key={menu.dbId} className={`bg-white p-5 mb-2 rounded-2xl flex justify-between items-center shadow-sm border border-slate-100 hover:shadow-md transition-shadow ${menu.isActive===false?'opacity-50 grayscale':''}`}>
+            <div className="flex gap-4 items-center">
+              <span className="font-bold text-slate-400 text-xl w-8 text-center">{index + 1}</span>
+              <img src={menu.image} className="w-20 h-20 rounded-xl object-cover" />
+              <div>
+                  <h3 className="font-bold flex items-center gap-2">
+                      {menu.name} 
+                      {menu.itemType === 'composite' && <span className="bg-orange-100 text-orange-700 text-[10px] px-1.5 py-0.5 rounded font-bold"><Layers size={10} className="inline mr-1"/>Komposit</span>}
+                      {menu.isActive === false && <span className="bg-slate-200 text-slate-600 text-[10px] px-1.5 py-0.5 rounded uppercase tracking-wider">Hidden</span>} 
+                      {menu.isTimeRestricted && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold"><Clock size={10} className="inline mr-1"/>Waktu</span>}
+                  </h3>
+                  <div className="flex items-center gap-3 mt-1 flex-wrap">
+                      {(() => {
+                          const itemHPP = getMenuHPP(menu, 'default', menus);
+                          const marginPct = menu.price > 0 ? (((menu.price - itemHPP) / menu.price) * 100).toFixed(1) : 0;
+                          return (
+                              <>
+                                  <p className="text-red-600 text-sm font-bold">{formatRp(menu.price)}</p>
+                                  <p className="text-slate-400 text-xs font-semibold">HPP: {formatRp(itemHPP)}</p>
+                                  <p className="text-green-700 text-[10px] font-bold bg-green-100 px-2 py-0.5 rounded-full">{marginPct}%</p>
+                                  {menu.itemType !== 'composite' && (
+                                      <p className="text-slate-400 text-xs font-semibold">Stok: {menu.variants?.reduce((a,b)=>a+(Number(b.qty)||0),0)}</p>
+                                  )}
+                              </>
+                          );
+                      })()}
+                  </div>
+              </div>
             </div>
             <div className="flex gap-2">
               <button onClick={() => handleToggleVisibility(menu.dbId, menu.isActive !== false)} className={`p-2 rounded-lg ${menu.isActive !== false ? 'bg-green-50 text-green-600' : 'bg-slate-100 text-slate-500'}`}><Eye size={18} /></button>
