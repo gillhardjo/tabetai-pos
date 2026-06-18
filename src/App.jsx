@@ -6,7 +6,7 @@ import {
 
 import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
-import { getFirestore, collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot } from 'firebase/firestore';
+import { collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, initializeFirestore } from 'firebase/firestore';
 
 // ==========================================
 // 1. FIREBASE CONFIGURATION
@@ -23,7 +23,11 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+
+// FIX: Menggunakan Long-Polling untuk mencegah timeout WebSocket (Cloud Firestore backend unreachable)
+const db = initializeFirestore(app, {
+  experimentalForceLongPolling: true
+});
 
 const getColRef = (colName) => {
   let name = colName;
@@ -303,7 +307,6 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const addToCart = (item, variantName, quantity, note) => {
     const varTarget = item.variants?.find(v => v.name === variantName);
     
-    // Periksa status stok terlebih dahulu SEBELUM update state keranjang (pure function fix)
     const existingIdx = cart.findIndex(i => (i.dbId || i.id) === (item.dbId || item.id) && i.variant === variantName && i.note === note);
     let currentCartQty = 0;
     if (existingIdx > -1) currentCartQty = cart[existingIdx].quantity;
@@ -480,7 +483,7 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
             </button>
           </div>
           
-          <MemberHome user={user} onNavigate={setView} promos={promos} formatRp={formatRp} onClaimPromo={(code) => { setClaimedPromoCode(code); showToast(`Voucher ${code} diklaim! Silakan pilih menu.`); }} />
+          <MemberHome user={user} menus={menus} onNavigate={setView} promos={promos} formatRp={formatRp} onClaimPromo={(code) => { setClaimedPromoCode(code); showToast(`Voucher ${code} diklaim! Silakan pilih menu.`); }} />
           
           <a href={`https://wa.me/${ADMIN_WA_NUMBER}?text=Halo%20Admin%20Tabetai,%20saya%20${user.name}%20butuh%20bantuan.`} target="_blank" rel="noreferrer" className="absolute bottom-6 right-6 bg-green-500 text-white p-4 rounded-full shadow-lg hover:bg-green-600 transition-transform active:scale-95 z-50">
             <MessageCircle size={28} />
@@ -541,8 +544,14 @@ function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   );
 }
 
-function MemberHome({ user, onNavigate, promos, formatRp, onClaimPromo }) {
-  const activePromos = promos?.filter(p => p.isActive !== false) || [];
+function MemberHome({ user, menus = [], onNavigate, promos, formatRp, onClaimPromo }) {
+  const activePromos = promos?.filter(p => {
+    if (p.isActive === false) return false;
+    if (p.eligibleUsers && !p.eligibleUsers.includes('all') && p.eligibleUsers.length > 0) {
+      if (!user || !p.eligibleUsers.includes(user.phone)) return false;
+    }
+    return true;
+  }) || [];
 
   return (
     <div className="flex-1 overflow-y-auto px-6 mt-6 pb-24 space-y-6">
@@ -556,6 +565,18 @@ function MemberHome({ user, onNavigate, promos, formatRp, onClaimPromo }) {
               const isOutOfStock = promo.stock !== undefined && promo.stock <= 0;
               const isUsed = promo.usedBy && promo.usedBy.includes(user?.phone);
               const isUnavailable = isOutOfStock || isUsed;
+              
+              const isAllMenus = !promo.applicableMenus || promo.applicableMenus.includes('all') || promo.applicableMenus.length === 0;
+              let applicableText = "Berlaku untuk: Semua makanan";
+              if (!isAllMenus && menus && menus.length > 0) {
+                  const applicableMenuNames = promo.applicableMenus
+                      .map(id => menus.find(m => m.dbId === id)?.name)
+                      .filter(Boolean)
+                      .join(', ');
+                  if (applicableMenuNames) {
+                      applicableText = `Berlaku untuk: ${applicableMenuNames}`;
+                  }
+              }
 
               return (
                 <div key={promo.dbId} className={`bg-white border-2 border-dashed ${isUnavailable ? 'border-slate-200 opacity-60 grayscale' : 'border-red-200'} rounded-2xl p-4 flex justify-between items-center shadow-sm relative overflow-hidden transition-all`}>
@@ -571,8 +592,13 @@ function MemberHome({ user, onNavigate, promos, formatRp, onClaimPromo }) {
                     <p className="text-sm font-bold text-slate-800 mt-1.5">
                       Potongan {promo.type === 'percent' ? `${promo.value}%` : formatRp(promo.value)}
                     </p>
+                    
+                    <p className="text-[10px] text-blue-600 font-semibold mt-0.5 leading-tight">
+                      {applicableText}
+                    </p>
+
                     {promo.maxDiscount > 0 && (
-                      <p className="text-xs text-slate-400 font-medium">Maks potongan {formatRp(promo.maxDiscount)}</p>
+                      <p className="text-xs text-slate-400 font-medium mt-0.5">Maks potongan {formatRp(promo.maxDiscount)}</p>
                     )}
                     {promo.minQty > 0 && (
                       <p className="text-xs text-slate-500 font-medium mt-0.5">Min. beli {promo.minQty} item</p>
@@ -611,7 +637,9 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
     if (defaultPromoCode) {
       const valid = promos.find(p => p.code === defaultPromoCode.toUpperCase() && p.isActive !== false);
       if (valid) {
-        if (valid.stock !== undefined && valid.stock <= 0) {
+        if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) {
+           showToast('Voucher eksklusif ini tidak berlaku untuk akun Anda', 'error');
+        } else if (valid.stock !== undefined && valid.stock <= 0) {
            showToast('Kuota promo sudah habis', 'error');
         } else if (valid.usedBy && valid.usedBy.includes(userPhone)) {
            showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
@@ -633,6 +661,7 @@ function MemberCheckout({ cart, onBack, updateQty, subtotal, onPay, promos, form
   const applyPromo = () => {
     const valid = promos.find(p => p.code === promoCode.toUpperCase() && p.isActive !== false);
     if (!valid) return showToast('Kode promo tidak valid', 'error');
+    if (valid.eligibleUsers && !valid.eligibleUsers.includes('all') && valid.eligibleUsers.length > 0 && !valid.eligibleUsers.includes(userPhone)) return showToast('Voucher eksklusif: Tidak berlaku untuk akun Anda', 'error');
     if (valid.stock !== undefined && valid.stock <= 0) return showToast('Kuota promo sudah habis', 'error');
     if (valid.usedBy && valid.usedBy.includes(userPhone)) return showToast('Anda sudah pernah menggunakan kode promo ini', 'error');
     
