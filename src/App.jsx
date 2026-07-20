@@ -8,9 +8,6 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, signInAnonymously } from 'firebase/auth';
 import { collection, doc, setDoc, addDoc, updateDoc, deleteDoc, onSnapshot, initializeFirestore } from 'firebase/firestore';
 
-// ==========================================
-// 1. FIREBASE CONFIGURATION
-// ==========================================
 const firebaseConfig = {
   apiKey: "AIzaSyAwsfBMS0_9gbPayYU-Ry2iFNfF8TMMKVU",
   authDomain: "tabetai-app-v103.firebaseapp.com",
@@ -42,9 +39,6 @@ const getDocRef = (colName, docId) => {
   return doc(db, name, docId);
 };
 
-// ==========================================
-// CONSTANTS & UTILS
-// ==========================================
 const ADMIN_CREDENTIALS = { username: 'admin', phone: '2131' };
 const ADMIN_WA_NUMBER = "6281285557779"; 
 const qrisImageUrl = "https://github.com/gillhardjo/tabetai-app/blob/main/public/qris.png?raw=true";
@@ -134,9 +128,6 @@ const generateInvoiceWAUrl = (order, userPhone) => {
   return `https://wa.me/${waNumber}?text=${text}`;
 };
 
-// ==========================================
-// MAIN APP COMPONENT (ROOT)
-// ==========================================
 export default function App() {
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [authError, setAuthError] = useState(null);
@@ -247,9 +238,6 @@ export default function App() {
   );
 }
 
-// ==========================================
-// 1. GUEST VIEW
-// ==========================================
 function GuestView({ onLogin, onRegister }) {
   const [view, setView] = useState('login');
   const [name, setName] = useState('');
@@ -303,9 +291,6 @@ function GuestView({ onLogin, onRegister }) {
   );
 }
 
-// ==========================================
-// 2. MEMBER APP VIEW (Customer)
-// ==========================================
 function MemberAppView({ user, menus, orders, promos, onLogout, showToast }) {
   const [view, setView] = useState('home'); 
   
@@ -890,9 +875,6 @@ function VariantModal({ item, onClose, onAdd, formatRp }) {
   );
 }
 
-// ==========================================
-// 3. ADMIN POS VIEW
-// ==========================================
 function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, showToast }) {
   const [activeTab, setActiveTab] = useState('kasir'); 
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -1361,11 +1343,11 @@ function AdminPOSView({ menus, orders, members, promos, savedBills, onLogout, sh
 
         {activeTab === 'laporan' && <AdminReportManager orders={orders} menus={menus} formatRp={formatRp} />}
         {activeTab === 'pesanan' && <AdminOrderManager orders={orders} members={members} menus={menus} promos={promos} db={db} formatRp={formatRp} showToast={showToast} onPrint={handlePrintReceipt} deductStockForOrder={deductStockForOrder} />}
-        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} showToast={showToast} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} />}
+        {activeTab === 'openbill' && <AdminOpenBill savedBills={savedBills} db={db} handleLoadBill={(b) => { setCart(b.items); setActiveBill({id: b.dbId, name: b.name, phone: b.phone}); setActiveTab('kasir'); }} showToast={showToast} />}
         {activeTab === 'menu' && <AdminMenuManager menus={menus} db={db} formatRp={formatRp} showToast={showToast} getMenuHPP={getMenuHPP} />}
         {activeTab === 'members' && <AdminMemberManager members={members} db={db} showToast={showToast} />}
         {activeTab === 'promos' && <AdminPromoManager promos={promos} menus={menus} members={members} db={db} formatRp={formatRp} showToast={showToast} />}
-
+        
         {variantModal && (
           <VariantModal item={variantModal} onClose={() => setVariantModal(false)} onAdd={addToCartFinal} formatRp={formatRp} />
         )}
@@ -1379,6 +1361,9 @@ function AdminReportManager({ orders, menus, formatRp }) {
   const [filterType, setFilterType] = useState('today'); // today, week, month, custom
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  
+  const [reportSearch, setReportSearch] = useState('');
+  const [reportSort, setReportSort] = useState('qty-desc');
 
   const filteredOrders = useMemo(() => {
     const now = new Date();
@@ -1410,7 +1395,7 @@ function AdminReportManager({ orders, menus, formatRp }) {
 
     return orders.filter(o => {
        const oDate = new Date(o.timestamp);
-       return oDate >= start && oDate <= end && (o.status === 'Selesai' || o.status === 'Diproses');
+       return oDate >= start && oDate <= end && (o.status === 'Selesai' || o.status === 'Diproses' || o.status === 'Pembayaran Diterima');
     });
   }, [orders, filterType, startDate, endDate]);
 
@@ -1424,6 +1409,8 @@ function AdminReportManager({ orders, menus, formatRp }) {
        grossSales += (order.originalTotal || order.total);
        netSales += order.total; // after discount
        
+       const orderDate = order.date ? order.date.split(',')[0].trim() : new Date(order.timestamp).toLocaleDateString('id-ID');
+
        order.items.forEach(item => {
            const qty = Number(item.qty || item.quantity || 1);
            const price = Number(item.price || 0);
@@ -1433,9 +1420,10 @@ function AdminReportManager({ orders, menus, formatRp }) {
            
            totalCogs += lineCogs;
 
-           const key = `${item.originalId || item.dbId}_${item.variantId || item.variant || 'default'}`;
+           const key = `${orderDate}_${item.originalId || item.dbId}_${item.variantId || item.variant || 'default'}`;
            if (!itemsSoldMap[key]) {
                itemsSoldMap[key] = {
+                   date: orderDate,
                    name: item.name,
                    variant: item.variantId || item.variant || 'default',
                    qty: 0,
@@ -1446,22 +1434,82 @@ function AdminReportManager({ orders, menus, formatRp }) {
            itemsSoldMap[key].qty += qty;
            itemsSoldMap[key].sales += lineSales;
            itemsSoldMap[key].cogs += lineCogs;
-       });
-    });
+         });
+      });
 
-    return {
-        grossSales,
-        netSales,
-        totalCogs,
-        grossProfit: netSales - totalCogs,
-        itemDetails: Object.values(itemsSoldMap).sort((a, b) => b.qty - a.qty)
-    };
+      return {
+          grossSales,
+          netSales,
+          totalCogs,
+          grossProfit: netSales - totalCogs,
+          averageMarginPct: netSales > 0 ? (((netSales - totalCogs) / netSales) * 100) : 0,
+          itemDetails: Object.values(itemsSoldMap)
+      };
   }, [filteredOrders]);
+
+  const processedItemDetails = useMemo(() => {
+      let items = reportMetrics.itemDetails.filter(item => item.name.toLowerCase().includes(reportSearch.toLowerCase()));
+      items.sort((a, b) => {
+          if (reportSort === 'qty-desc') return b.qty - a.qty;
+          if (reportSort === 'sales-desc') return b.sales - a.sales;
+          if (reportSort === 'margin-desc') return (b.sales - b.cogs) - (a.sales - a.cogs);
+          if (reportSort === 'name-asc') return a.name.localeCompare(b.name);
+          return 0;
+      });
+      return items;
+  }, [reportMetrics.itemDetails, reportSearch, reportSort]);
+
+  const handleExportCSV = () => {
+      if (processedItemDetails.length === 0) {
+          return alert("Tidak ada data untuk diekspor");
+      }
+      const headers = ['Tanggal', 'Nama Item', 'Varian', 'Terjual (Qty)', 'Penjualan (Rp)', 'HPP (Rp)', 'Margin (Rp)', 'Margin (%)'];
+      const csvRows = [headers.join(',')];
+      
+      processedItemDetails.forEach(item => {
+          const margin = item.sales - item.cogs;
+          const marginPct = item.sales > 0 ? ((margin / item.sales) * 100).toFixed(1) : 0;
+          const row = [
+              `"${item.date}"`,
+              `"${item.name.replace(/"/g, '""')}"`,
+              `"${item.variant.replace(/"/g, '""')}"`,
+              item.qty,
+              item.sales,
+              item.cogs,
+              margin,
+              marginPct
+          ];
+          csvRows.push(row.join(','));
+      });
+      
+      // Tambahkan ringkasan total margin di bagian bawah CSV
+      csvRows.push('');
+      csvRows.push('RINGKASAN PENJUALAN KESELURUHAN');
+      csvRows.push(`Penjualan Kotor,${reportMetrics.grossSales}`);
+      csvRows.push(`Penjualan Bersih (Nett),${reportMetrics.netSales}`);
+      csvRows.push(`Total HPP,${reportMetrics.totalCogs}`);
+      csvRows.push(`Laba Kotor,${reportMetrics.grossProfit}`);
+      csvRows.push(`Rata-rata Margin Laba,${reportMetrics.averageMarginPct.toFixed(1)}%`);
+      
+      const blob = new Blob([csvRows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `Laporan_Penjualan_${filterType}_${new Date().toLocaleDateString('id-ID').replace(/\//g, '-')}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+  };
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden bg-slate-50">
       <div className="bg-white p-6 border-b border-slate-200 shadow-sm z-10 sticky top-0">
-        <h2 className="text-2xl font-bold mb-4">Laporan Penjualan</h2>
+        <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-4">
+            <h2 className="text-2xl font-bold">Laporan Penjualan</h2>
+            <button onClick={handleExportCSV} className="bg-green-600 text-white px-4 py-2 rounded-xl flex items-center justify-center gap-2 font-bold shadow-sm hover:bg-green-700 transition-colors">
+                <Download size={18} /> Export Laporan (CSV)
+            </button>
+        </div>
         <div className="flex flex-wrap gap-3 items-center">
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm outline-none font-bold text-slate-700">
                 <option value="today">Hari Ini</option>
@@ -1480,13 +1528,13 @@ function AdminReportManager({ orders, menus, formatRp }) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-6 space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
                   <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center"><Banknote size={24}/></div>
                   <div><p className="text-slate-500 text-sm font-medium">Penjualan Kotor</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.grossSales)}</p></div>
               </div>
               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
-                  <div className="w-12 h-12 bg-green-50 text-green-600 rounded-xl flex items-center justify-center"><TrendingUp size={24}/></div>
+                  <div className="w-12 h-12 bg-green-50 text-green-600 rounded-xl flex items-center justify-center"><Banknote size={24}/></div>
                   <div><p className="text-slate-500 text-sm font-medium">Penjualan Bersih (Nett)</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.netSales)}</p></div>
               </div>
               <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
@@ -1497,34 +1545,54 @@ function AdminReportManager({ orders, menus, formatRp }) {
                   <div className="w-12 h-12 bg-purple-50 text-purple-600 rounded-xl flex items-center justify-center"><BarChart3 size={24}/></div>
                   <div><p className="text-slate-500 text-sm font-medium">Laba Kotor</p><p className="text-xl font-bold text-slate-800">{formatRp(reportMetrics.grossProfit)}</p></div>
               </div>
+              <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm flex items-center gap-4">
+                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center"><TrendingUp size={24}/></div>
+                  <div><p className="text-slate-500 text-sm font-medium">Rata-rata Margin</p><p className="text-xl font-bold text-slate-800">{reportMetrics.averageMarginPct.toFixed(1)}%</p></div>
+              </div>
           </div>
 
           <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden mt-8">
-              <div className="p-5 border-b border-slate-100 bg-slate-50"><h3 className="font-bold text-slate-800">Detail Penjualan Item</h3></div>
+              <div className="p-5 border-b border-slate-100 bg-slate-50 flex flex-col md:flex-row justify-between items-center gap-4">
+                  <h3 className="font-bold text-slate-800">Detail Penjualan Item</h3>
+                  <div className="flex gap-2 w-full md:w-auto">
+                      <div className="relative flex-1 md:w-48">
+                          <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                          <input type="text" placeholder="Cari item..." value={reportSearch} onChange={e=>setReportSearch(e.target.value)} className="w-full pl-9 pr-3 py-2 border rounded-xl outline-none text-sm focus:border-slate-400" />
+                      </div>
+                      <select value={reportSort} onChange={e=>setReportSort(e.target.value)} className="px-3 py-2 border rounded-xl text-sm font-semibold outline-none bg-white focus:border-slate-400">
+                          <option value="qty-desc">Terlaris (Qty)</option>
+                          <option value="sales-desc">Penjualan Terbesar</option>
+                          <option value="margin-desc">Margin Terbesar</option>
+                          <option value="name-asc">Nama (A-Z)</option>
+                      </select>
+                  </div>
+              </div>
               <div className="overflow-x-auto">
                   <table className="w-full text-left text-sm">
                       <thead className="bg-white border-b border-slate-100 text-slate-500">
                           <tr>
-                              <th className="p-4 font-semibold">Nama Item</th>
-                              <th className="p-4 font-semibold">Varian</th>
-                              <th className="p-4 font-semibold text-center">Terjual</th>
-                              <th className="p-4 font-semibold text-right">Penjualan</th>
-                              <th className="p-4 font-semibold text-right">HPP Item</th>
-                              <th className="p-4 font-semibold text-right">Margin Laba</th>
+                              <th className="p-4 font-semibold whitespace-nowrap">Tanggal</th>
+                              <th className="p-4 font-semibold whitespace-nowrap">Nama Item</th>
+                              <th className="p-4 font-semibold whitespace-nowrap">Varian</th>
+                              <th className="p-4 font-semibold text-center whitespace-nowrap">Terjual</th>
+                              <th className="p-4 font-semibold text-right whitespace-nowrap">Penjualan</th>
+                              <th className="p-4 font-semibold text-right whitespace-nowrap">HPP Item</th>
+                              <th className="p-4 font-semibold text-right whitespace-nowrap">Margin Laba</th>
                           </tr>
                       </thead>
                       <tbody>
-                          {reportMetrics.itemDetails.length === 0 ? (
-                              <tr><td colSpan="6" className="p-8 text-center text-slate-400">Belum ada data penjualan.</td></tr>
+                          {processedItemDetails.length === 0 ? (
+                              <tr><td colSpan="7" className="p-8 text-center text-slate-400">Tidak ada data penjualan yang cocok.</td></tr>
                           ) : (
-                              reportMetrics.itemDetails.map((item, i) => (
+                              processedItemDetails.map((item, i) => (
                                   <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50">
-                                      <td className="p-4 font-medium text-slate-800">{item.name}</td>
-                                      <td className="p-4 text-slate-600">{item.variant}</td>
+                                      <td className="p-4 text-slate-600 whitespace-nowrap">{item.date}</td>
+                                      <td className="p-4 font-medium text-slate-800 whitespace-nowrap">{item.name}</td>
+                                      <td className="p-4 text-slate-600 whitespace-nowrap">{item.variant}</td>
                                       <td className="p-4 text-center font-bold">{item.qty}</td>
-                                      <td className="p-4 text-right text-slate-800 font-medium">{formatRp(item.sales)}</td>
-                                      <td className="p-4 text-right text-orange-600 font-medium">{formatRp(item.cogs)}</td>
-                                      <td className="p-4 text-right">
+                                      <td className="p-4 text-right text-slate-800 font-medium whitespace-nowrap">{formatRp(item.sales)}</td>
+                                      <td className="p-4 text-right text-orange-600 font-medium whitespace-nowrap">{formatRp(item.cogs)}</td>
+                                      <td className="p-4 text-right whitespace-nowrap">
                                           <div className="text-green-600 font-bold">{formatRp(item.sales - item.cogs)}</div>
                                           <div className="text-xs text-slate-500 mt-0.5">{item.sales > 0 ? (((item.sales - item.cogs) / item.sales) * 100).toFixed(1) : 0}%</div>
                                       </td>
@@ -1560,7 +1628,7 @@ function AdminOrderManager({ orders, members, menus, promos, db, formatRp, showT
     try {
       const updates = { status: newStatus };
       
-      if (newStatus === 'Diproses' || newStatus === 'Selesai') {
+      if (newStatus === 'Pembayaran Diterima' || newStatus === 'Diproses' || newStatus === 'Selesai') {
         if (!target.isPointsAwarded && target.customer !== 'Walk-in / Cashier') {
           updates.isPointsAwarded = true;
           const member = members.find(m => m.name === target.customer && m.phone === target.customerPhone);
@@ -2199,8 +2267,18 @@ function AdminMenuManager({ menus, db, formatRp, showToast, getMenuHPP }) {
 function AdminMemberManager({ members, db, showToast }) {
   const [editingMember, setEditingMember] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortMember, setSortMember] = useState('newest'); // newest, points-desc, points-asc, name-asc
 
-  const filteredMembers = members.filter(m => m.name.toLowerCase().includes(searchQuery.toLowerCase()) || (m.phone && m.phone.includes(searchQuery)));
+  const processedMembers = useMemo(() => {
+      let filtered = members.filter(m => m.name.toLowerCase().includes(searchQuery.toLowerCase()) || (m.phone && m.phone.includes(searchQuery)));
+      return filtered.sort((a, b) => {
+          if (sortMember === 'points-desc') return (b.points || 0) - (a.points || 0);
+          if (sortMember === 'points-asc') return (a.points || 0) - (b.points || 0);
+          if (sortMember === 'name-asc') return a.name.localeCompare(b.name);
+          if (sortMember === 'newest') return (b.joinedAt || 0) - (a.joinedAt || 0);
+          return 0;
+      });
+  }, [members, searchQuery, sortMember]);
 
   const handleSave = async (e) => { e.preventDefault(); try { await updateDoc(getDocRef('members', editingMember.dbId), { name: editingMember.name, phone: editingMember.phone, points: Number(editingMember.points) }); setEditingMember(null); showToast("Data member diperbarui!", "success"); } catch (error) { showToast("Gagal memperbarui data", "error"); } };
 
@@ -2208,16 +2286,27 @@ function AdminMemberManager({ members, db, showToast }) {
     <div className="flex-1 p-6 overflow-y-auto bg-slate-50 relative">
       <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
         <h2 className="text-2xl font-bold">Daftar Member</h2>
-        <div className="relative w-full md:w-64"><Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} /><input type="text" placeholder="Cari nama / no wa..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:border-red-500 outline-none" /></div>
+        <div className="flex flex-col sm:flex-row gap-3 w-full md:w-auto">
+            <div className="relative w-full md:w-64">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input type="text" placeholder="Cari nama / no wa..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:border-red-500 outline-none" />
+            </div>
+            <select value={sortMember} onChange={e=>setSortMember(e.target.value)} className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:border-red-500">
+                <option value="newest">Terbaru</option>
+                <option value="points-desc">Poin Terbanyak</option>
+                <option value="points-asc">Poin Sedikit</option>
+                <option value="name-asc">Nama (A-Z)</option>
+            </select>
+        </div>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {filteredMembers.map(m => (
+        {processedMembers.map(m => (
           <div key={m.dbId} className="bg-white p-4 rounded-2xl flex justify-between items-center shadow-sm">
             <div><h3 className="font-bold text-slate-800">{m.name}</h3><p className="text-slate-500 text-sm mt-0.5">{m.phone}</p><p className="text-yellow-600 font-bold text-sm mt-1">{m.points || 0} Poin</p></div>
             <div className="flex gap-2"><button onClick={() => setEditingMember(m)} className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors"><Edit2 size={18} /></button><button onClick={() => { if(window.confirm('Hapus member ini?')) deleteDoc(getDocRef('members', m.dbId)) }} className="p-2 bg-red-50 text-red-500 hover:bg-red-100 rounded-lg transition-colors"><Trash2 size={18}/></button></div>
           </div>
         ))}
-        {filteredMembers.length === 0 && <p className="text-slate-500 col-span-2 text-center py-10">Member tidak ditemukan</p>}
+        {processedMembers.length === 0 && <p className="text-slate-500 col-span-2 text-center py-10">Member tidak ditemukan</p>}
       </div>
 
       {editingMember && (
